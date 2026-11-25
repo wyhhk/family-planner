@@ -35,6 +35,12 @@ button{cursor:pointer}
 .chip{border:2px solid var(--line);background:var(--card);border-radius:999px;padding:4px 14px 4px 4px;font-weight:800;font-size:15px;display:flex;align-items:center;gap:7px;white-space:nowrap;flex:none}
 .chip .av{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font-size:19px;background:var(--soft)}
 .chip.on{color:#fff}.chip.on .av{background:rgba(255,255,255,.22)}
+.av{display:inline-grid;place-items:center;border-radius:50%;overflow:hidden;flex:none;background:var(--soft)}
+.av img{width:100%;height:100%;object-fit:cover;display:block}
+.chip .pen{font-size:11px;margin-left:-2px;opacity:.9}
+.emgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(46px,1fr));gap:6px;margin-top:6px}
+.emb{font-size:26px;height:46px;border-radius:12px;border:1px solid var(--line);background:var(--card);cursor:pointer}
+.emb.on{outline:3px solid #0f766e}
 .tabs{display:flex;gap:4px;background:var(--soft);padding:4px;border-radius:14px;margin-bottom:12px;overflow-x:auto;scrollbar-width:none}
 .tab{flex:1 0 auto;border:0;background:transparent;padding:9px 12px;border-radius:10px;font-weight:800;color:var(--muted);font-size:14px;white-space:nowrap}
 .tab.on{background:var(--card);color:var(--ink);box-shadow:var(--shadow)}
@@ -65,6 +71,13 @@ h3{margin:0 0 8px;font-size:16px}
 .now .btn{background:rgba(255,255,255,.2);color:#fff}
 .now .btn.w{background:#fff;color:var(--kid)}
 .now.over{background:linear-gradient(135deg,#b91c1c,#ea580c)}
+.now.due{box-shadow:0 0 0 4px #f59e0b inset}
+.now .clock.late{color:#fde68a}
+.now.ring{animation:ring .5s ease-in-out 6}
+@keyframes ring{0%,100%{transform:none}25%{transform:rotate(-1.2deg) scale(1.01)}75%{transform:rotate(1.2deg) scale(1.01)}}
+.alarmset{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
+.alarmset .btn{min-height:34px;padding:4px 10px}
+.mini{font-variant-numeric:tabular-nums;font-weight:800;margin-left:4px}
 /* timetable */
 .tt{display:grid;position:relative}
 .tt .head{position:sticky;top:0;z-index:5;background:var(--bg);display:grid;padding:4px 0}
@@ -331,6 +344,9 @@ var FP = (function () {
   }
   function natureOf(db, name) { return taskOf(db, name).nature; }
   function kidOf(db, name) { var k = db.settings.kids.filter(function (x) { return x.name === name; })[0]; return k || null; }
+  // grown-ups can keep their own timetable: same planning/workdone, but no tickets, cards, rewards or report
+  function isAdult(db, name) { var k = kidOf(db, name); return !!(k && k.adult); }
+  function childrenOf(settings) { return (settings.kids || []).filter(function (k) { return !k.adult; }); }
   function byRef(list, ref) { for (var i = 0; i < list.length; i++) if (list[i].ref === ref) return list[i]; return null; }
   function doneFor(db, planRef) { return db.done.filter(function (w) { return w.planRef === planRef; }); }
   function running(db, kid) { return db.done.filter(function (w) { return w.status === 'Running' && (!kid || w.kid === kid); }); }
@@ -339,7 +355,11 @@ var FP = (function () {
 
   /* ---------- change tracking (so the server only rewrites what changed) ---------- */
   function chg(db, t) { db._chg = db._chg || {}; return (db._chg[t] = db._chg[t] || { add: [], upd: [], del: false }); }
-  function ins(db, t, row) { db[t].push(row); chg(db, t).add.push(row); return row; }
+  function ins(db, t, row) {
+    if ((t === 'tickets' || t === 'cards') && db.settings && isAdult(db, row.kid)) return row; // grown-ups have no tickets or cards
+    if (t === 'done' && db.settings && isAdult(db, row.kid)) row.tickets = 0;
+    db[t].push(row); chg(db, t).add.push(row); return row;
+  }
   function upd(db, t, row) { var c = chg(db, t); if (c.add.indexOf(row) < 0 && c.upd.indexOf(row) < 0) c.upd.push(row); return row; }
   function rem(db, t, row) { var i = db[t].indexOf(row); if (i >= 0) { db[t].splice(i, 1); chg(db, t).del = true; } }
   function nextRef(db) { db.meta.nextRef = Math.max(1, +db.meta.nextRef || 1); db.meta.dirty = true; return pad(db.meta.nextRef++, 5); }
@@ -425,7 +445,7 @@ var FP = (function () {
   function applyResult(db, w, ctx) {
     w.result = resultOf(db, w);
     w.min = w.status === 'Done' ? span(w.from, w.to) : (w.status === 'Cancelled' ? 0 : w.min || 0);
-    if (natureOf(db, w.task) === 'Toxic' && w.status === 'Done') {
+    if (natureOf(db, w.task) === 'Toxic' && w.status === 'Done' && !isAdult(db, w.kid)) {
       var allowed = (+w.tickets || 0) * TICKET_MIN;
       var over = Math.max(0, w.min - allowed);
       w.overrun = over;
@@ -452,7 +472,7 @@ var FP = (function () {
   }
   function dueEnd(db, w) {
     var s = abs(w.date, w.from);
-    if (natureOf(db, w.task) === 'Toxic') return s + (+w.tickets || 0) * TICKET_MIN;
+    if (natureOf(db, w.task) === 'Toxic' && !isAdult(db, w.kid)) return s + (+w.tickets || 0) * TICKET_MIN;
     var p = w.planRef ? byRef(db.plan, w.planRef) : null;
     if (p) return Math.max(s, abs(p.date, p.from) + span(p.from, p.to));
     return s + 60;
@@ -497,7 +517,7 @@ var FP = (function () {
         linked[p.ref] = true;
       }
       // 3) Toxic slot tickets once the Academic/Development tasks before it are done
-      if (n === 'Toxic') {
+      if (n === 'Toxic' && !isAdult(db, p.kid)) {
         var st = slotState(db, p, now);
         if (st.state === 'ready') ins(db, 'tickets', { ref: nextRef(db), kid: p.kid, date: now.date, time: now.time, change: st.n, kind: 'Earned', reason: 'Planned ' + p.task + ' ' + p.from + '–' + p.to + ' (' + uk(p.date) + ')', relRef: p.ref, by: 'Auto' });
       }
@@ -529,7 +549,7 @@ var FP = (function () {
       if (plan && plan.task !== p.task && natureOf(db, plan.task) === 'Living') plan = null; // doing something else during School/Free etc. is simply unplanned
       var nature = natureOf(db, p.task), n = 0;
       var ref = nextRef(db);
-      if (nature === 'Toxic') {
+      if (nature === 'Toxic' && !isAdult(db, p.kid)) {
         n = Math.max(1, Math.round(+p.tickets || 1));
         if (balance(db, p.kid) < n) throw err('NO_TICKETS');
         ins(db, 'tickets', { ref: nextRef(db), kid: p.kid, date: now.date, time: now.time, change: -n, kind: 'Used', reason: p.task + ' (' + n * TICKET_MIN + ' min)', relRef: ref, by: ctx.name });
@@ -549,6 +569,7 @@ var FP = (function () {
     extend: function (db, p, ctx, now) {
       var w = byRef(db.done, p.ref);
       if (!w || w.status !== 'Running' || natureOf(db, w.task) !== 'Toxic') throw err('Only a running Toxic session can be extended');
+      if (isAdult(db, w.kid)) throw err('Grown-ups do not use tickets');
       var n = Math.max(1, Math.round(+p.tickets || 1));
       if (balance(db, w.kid) < n) throw err('NO_TICKETS');
       ins(db, 'tickets', { ref: nextRef(db), kid: w.kid, date: now.date, time: now.time, change: -n, kind: 'Used', reason: 'Extra time for ' + w.task, relRef: w.ref, by: ctx.name });
@@ -651,8 +672,30 @@ var FP = (function () {
       if (t.goal && was < t.goal && t.progress >= t.goal) msg(db, now, 'Target', '🎉 ' + t.kid + ' reached the target "' + t.title + '" (' + t.progress + '/' + t.goal + ')', [t.id], ctx.name);
       return {};
     },
+    // a child changes own icon / photo (parents can change anyone's)
+    avatar: function (db, p, ctx, now) {
+      var k = (db.settings.kids || []).filter(function (x) { return x.name === p.kid; })[0];
+      if (!k) throw err('Unknown child');
+      if (ctx.role !== 'parent' && ctx.name !== k.name) throw err('You can only change your own picture');
+      var what;
+      if (p.clear) { k.photo = ''; what = 'removed the photo'; }
+      else if (p.photo != null) {
+        var ph = String(p.photo);
+        if (!/^data:image\/jpeg;base64,[A-Za-z0-9+\/=]+$/.test(ph) || ph.length > 8600) throw err('That photo could not be used – try another one');
+        k.photo = ph; what = 'uploaded a new photo';
+      } else {
+        var e = String(p.emoji || '').trim();
+        if (!e || e.length > 8) throw err('Pick an icon');
+        k.emoji = e; what = 'changed the icon to ' + e;
+      }
+      db._settingsChanged = true;
+      db._avatar = { kid: k.name, photo: k.photo || '' , photoChanged: p.clear || p.photo != null };
+      msg(db, now, 'Profile', (ctx.name === k.name ? k.name : ctx.name + ' (for ' + k.name + ')') + ' ' + what, '', ctx.name);
+      return { kid: k.name, emoji: k.emoji, photo: !!k.photo };
+    },
     redeem: function (db, p, ctx, now) {
       needKid(db, p.kid);
+      if (isAdult(db, p.kid)) throw err('Grown-ups do not use tickets');
       var r = (db.settings.rewards || []).filter(function (x) { return x.id === p.id && x.active !== 'No'; })[0];
       if (!r) throw err('That reward is not available');
       if (balance(db, p.kid) < r.cost) throw err('NO_TICKETS');
@@ -757,6 +800,7 @@ var FP = (function () {
     },
     ticket: function (db, p, ctx, now) {
       needKid(db, p.kid);
+      if (isAdult(db, p.kid)) throw err('Grown-ups do not use tickets');
       var n = Math.round(+p.change);
       if (!n) throw err('Enter how many tickets');
       if (!String(p.reason || '').trim()) throw err('Please give a reason');
@@ -831,7 +875,7 @@ var FP = (function () {
     /* red cards (and every 3 yellow cards) are taken off the ticket balance when the weekly report is generated */
     applyCards: function (db, p, ctx, now) {
       var out = [];
-      db.settings.kids.forEach(function (k) {
+      childrenOf(db.settings).forEach(function (k) {
         var reds = db.cards.filter(function (c) { return c.kid === k.name && c.color === 'Red' && c.status === 'Active'; });
         var yellows = db.cards.filter(function (c) { return c.kid === k.name && c.color === 'Yellow' && c.status === 'Active'; }).sort(function (a, b) { return a.ref < b.ref ? -1 : 1; });
         var redN = reds.reduce(function (s, c) { return s + (+c.count || 1); }, 0);
@@ -1096,11 +1140,23 @@ var FP = (function () {
     r.check.counts = r.imported;
     return r.check;
   }
-  var KID_ACTIONS = { start: 1, finish: 1, extend: 1, change: 1, cancel: 1, addDone: 1, editDone: 1, delDone: 1, targetInc: 1, redeem: 1, addTarget: 1 };
+  // History (Messages) rows for Excel, newest first; from/to (yyyy-mm-dd) optional
+  function historyRows(db, from, to) {
+    return (db.messages || []).filter(function (m) {
+      if (!from && !to) return true;
+      var t = String(m.time || ''), d = t.slice(6, 10) + '-' + t.slice(3, 5) + '-' + t.slice(0, 2);
+      return (!from || d >= from) && (!to || d <= to);
+    }).slice().reverse().map(function (m) { return { time: m.time, type: m.type, text: m.text, refs: m.refs || '', by: m.by, state: m.state || '' }; });
+  }
+  var KID_ACTIONS = { start: 1, finish: 1, extend: 1, change: 1, cancel: 1, addDone: 1, editDone: 1, delDone: 1, targetInc: 1, redeem: 1, addTarget: 1, avatar: 1 };
 
   function exec(db, action, payload, ctx, now) {
     if (!ACTIONS[action]) throw err('Unknown action');
     if (!KID_ACTIONS[action] && ctx.role !== 'parent') throw err('Parents only');
+    if (ctx.role !== 'parent') { // a grown-up's own timetable can only be used with that parent's PIN
+      var pl = payload || {}, row = pl.ref ? (byRef(db.done, pl.ref) || byRef(db.plan, pl.ref)) : null;
+      if (isAdult(db, ctx.name) || isAdult(db, pl.kid) || (row && isAdult(db, row.kid))) throw err('Parents only');
+    }
     housekeeping(db, now);
     var r = ACTIONS[action](db, payload || {}, ctx, now);
     housekeeping(db, now);
@@ -1126,7 +1182,7 @@ var FP = (function () {
     var we = addDays(ws, 6), wsA = abs(ws, '00:00'), weA = abs(we, '23:59') + 1;
     return {
       ws: ws, we: we, label: weekLabel(ws), inProgress: now.date >= ws && now.date <= we,
-      kids: db.settings.kids.map(function (k) {
+      kids: childrenOf(db.settings).map(function (k) {
         var plans = db.plan.filter(function (p) { return p.kid === k.name && p.date >= ws && p.date <= we; }).sort(sortPlans);
         var dones = db.done.filter(function (w) { return w.kid === k.name && w.date >= ws && w.date <= we; });
         var byN = {};
@@ -1258,7 +1314,7 @@ var FP = (function () {
     normDate: normDate, normTime: normTime, esc: esc, safeUrl: safeUrl, hm: hm,
     defaults: defaults, sampleTemplate: sampleTemplate, normNature: normNature, autoEmoji: autoEmoji, stamp: stamp, latestRef: latestRef, checkImport: checkImport, taskOf: taskOf, natureOf: natureOf, kidOf: kidOf, byRef: byRef, doneFor: doneFor,
     running: running, balance: balance, slotCheck: slotCheck, sortPlans: sortPlans, planState: planState, slotState: slotState, resultOf: resultOf, dueEnd: dueEnd,
-    housekeeping: housekeeping, exec: exec, ACTIONS: ACTIONS, KID_ACTIONS: KID_ACTIONS, targetView: targetView,
+    housekeeping: housekeeping, exec: exec, isAdult: isAdult, childrenOf: childrenOf, ACTIONS: ACTIONS, KID_ACTIONS: KID_ACTIONS, targetView: targetView, historyRows: historyRows,
     buildReport: buildReport, trends: trends, undoMsg: undoMsg, defaultRewards: defaultRewards, reportHtml: reportHtml, reportText: reportText
   };
 })();
@@ -1312,7 +1368,7 @@ const W = {
     startNow: '▶ Start now', startAt: 'Start at…', start: 'Start', finish: '■ Finish', finishNow: '■ Finish now', finishAt: 'Finish at…',
     doElse: '↺ Do something else instead', didIt: '✓ I already did it', cancelTask: '✕ Cancel this task', cancelRun: '✕ Cancel (didn’t do it)',
     changeTask: '↺ Change task', moreTime: '+1 🎟 (15 min)', open: 'Open ↗', reason: 'Reason', optional: 'optional',
-    now: 'Now', next: 'Next', allDone: 'All done for today 🎉', freeNow: 'Nothing planned right now', started: 'Started', timeLeft: 'Time left', over: 'over',
+    now: 'Now', next: 'Next', allDone: 'All done for today 🎉', freeNow: 'Nothing planned right now', started: 'Started', timeLeft: 'Time left', over: 'over', endsAt: 'finish at', elapsed: 'Time so far', timesUp: "Time's up!", timesUpHint: 'Press Finish when you are ready', noEnd: 'No finish time – set an alarm:', minShort: 'min', soundOn: 'Alarm sound on', soundOff: 'Alarm sound off', ownTT: 'Own timetable', ownTTon: 'Own timetable ✓', ownTTwarn: 'Hide this timetable? Its entries stay in the sheet.', myDay: 'My day',
     overWarn: 'Yellow card at 3 min over, red card at 15 min over', iDid: '＋ I did something', tickets: 'Tickets', cards: 'Cards',
     autoLiving: 'Living tasks count as done automatically.', auto: 'Auto', running: 'Running', upcoming: 'Upcoming', missed: 'Missed', done: 'Done', changed: 'Changed', cancelled: 'Cancelled', nowState: 'Now',
     planned: 'Planned', actual: 'Done', laneP: 'Plan', laneD: 'Done', result: 'Result',
@@ -1326,7 +1382,7 @@ const W = {
     emailNow: '📧 Email report now', emailWarn: 'Sending also deducts pending red cards.', copyText: '📋 Copy as text', copied: 'Copied ✓', sent: 'Report emailed ✓',
     notes: 'What they found and did', noteDone: 'What you found and did', notePh: 'e.g. learned 8 new words; the hard part was…', missedList: 'Missed',
     rewards: 'Rewards', redeem: 'Redeem', needMore: 'more needed', redeemed: 'Redeemed – a parent will give it to you', recentRewards: 'Recent rewards', manageRewards: 'Rewards list', addReward: '＋ Add reward', saveRewards: 'Save rewards', cost: 'Cost',
-    undo: '↩️ Undo', undone: 'Undone ✓', copyWeek: 'Copy previous week here', autoFill: 'Next week is filled from the template automatically when the weekly report is sent', usesTickets: 'Uses', moreLater: 'Need more time? Tap +1 🎟 while playing.', hide: 'Hide', show: 'Show', trends: 'Trends – last 8 weeks', trendsTable: 'Show as a table', hoursOf: 'hours', weekOf: 'Week of', skip: 'Skip', reflect: 'Well done! What did you find and do?', slots: 'Toxic slots', topTasks: 'Most time on',
+    undo: '↩️ Undo', undone: 'Undone ✓', copyWeek: 'Copy previous week here', autoFill: 'Next week is filled from the template automatically when the weekly report is sent', exportHist: 'Export history to Excel', myPic: 'My picture', pickIcon: 'Choose an icon', uploadPhoto: 'Upload a photo', takePhoto: 'Take or choose a photo', removePhoto: 'Remove photo', photoBad: 'That photo could not be read – try another one', picSaved: 'Picture changed ✓', tapToGrant: 'Tap 🎟 to grant or deduct', usesTickets: 'Uses', moreLater: 'Need more time? Tap +1 🎟 while playing.', hide: 'Hide', show: 'Show', trends: 'Trends – last 8 weeks', trendsTable: 'Show as a table', hoursOf: 'hours', weekOf: 'Week of', skip: 'Skip', reflect: 'Well done! What did you find and do?', slots: 'Toxic slots', topTasks: 'Most time on',
     addTarget: '＋ Add target', short: 'Short term', long: 'Long term', due: 'Due', daysLeft: 'days left', dueToday: 'Due today', overdue: 'Overdue', achieved: 'Achieved',
     kind: 'Type', count: 'Count (e.g. 10 spelling words)', hoursKind: 'Hours on a task', milestone: 'Milestone (done / not yet)', goal: 'Goal', progress: 'Progress', since: 'Count hours from', title: 'Target',
     events: 'Coming events · next 2 weeks', noEvents: 'No events in the next 2 weeks.', allDay: 'All day', refresh: 'Refresh', chooseCals: 'Choose calendars in Setup.',
@@ -1357,7 +1413,7 @@ const W = {
     startNow: '▶ 現在開始', startAt: '選擇開始時間…', start: '開始', finish: '■ 結束', finishNow: '■ 現在結束', finishAt: '選擇結束時間…',
     doElse: '↺ 改做另一個任務', didIt: '✓ 我已經做了', cancelTask: '✕ 取消這個任務', cancelRun: '✕ 取消（沒有做）',
     changeTask: '↺ 更改任務', moreTime: '+1 🎟（15 分鐘）', open: '打開 ↗', reason: '原因', optional: '可選',
-    now: '現在', next: '下一個', allDone: '今天全部完成 🎉', freeNow: '現在沒有計劃', started: '開始於', timeLeft: '剩餘時間', over: '超時',
+    now: '現在', next: '下一個', allDone: '今天全部完成 🎉', freeNow: '現在沒有計劃', started: '開始於', timeLeft: '剩餘時間', over: '超時', endsAt: '完成時間', elapsed: '已用時間', timesUp: '時間到！', timesUpHint: '準備好就按「完成」', noEnd: '沒有完成時間 – 設定鬧鐘：', minShort: '分鐘', soundOn: '鬧鐘聲音：開', soundOff: '鬧鐘聲音：關', ownTT: '自己的時間表', ownTTon: '自己的時間表 ✓', ownTTwarn: '隱藏這個時間表？紀錄會保留在試算表。', myDay: '我的一天',
     overWarn: '超時 3 分鐘黃牌，15 分鐘紅牌', iDid: '＋ 我做了其他事', tickets: '票', cards: '牌',
     autoLiving: '生活類任務會自動當作完成。', auto: '自動', running: '進行中', upcoming: '未開始', missed: '錯過', done: '完成', changed: '改了任務', cancelled: '取消', nowState: '現在',
     planned: '計劃', actual: '實際', laneP: '計劃', laneD: '實際', result: '結果',
@@ -1371,7 +1427,7 @@ const W = {
     emailNow: '📧 立即寄出報告', emailWarn: '寄出時也會扣除待扣的紅牌。', copyText: '📋 複製文字', copied: '已複製 ✓', sent: '報告已寄出 ✓',
     notes: '發現和做了什麼', noteDone: '你發現了什麼、做了什麼', notePh: '例如：學了 8 個新字；最難的是…', missedList: '錯過',
     rewards: '獎勵', redeem: '兌換', needMore: '張不夠', redeemed: '已兌換 – 家長會給你', recentRewards: '最近兌換', manageRewards: '獎勵清單', addReward: '＋ 新增獎勵', saveRewards: '儲存獎勵', cost: '票數',
-    undo: '↩️ 還原', undone: '已還原 ✓', copyWeek: '複製上一週到這週', autoFill: '每週報告寄出時，會自動用範本填好下一週', usesTickets: '使用', moreLater: '想玩久一點？進行中按 +1 🎟。', hide: '隱藏', show: '顯示', trends: '趨勢 – 最近 8 週', trendsTable: '以表格顯示', hoursOf: '小時', weekOf: '週', skip: '略過', reflect: '做得好！你發現了什麼、做了什麼？', slots: '有毒時段', topTasks: '最多時間',
+    undo: '↩️ 還原', undone: '已還原 ✓', copyWeek: '複製上一週到這週', autoFill: '每週報告寄出時，會自動用範本填好下一週', exportHist: '匯出歷史紀錄到 Excel', myPic: '我的頭像', pickIcon: '選一個圖示', uploadPhoto: '上傳相片', takePhoto: '拍照或選相片', removePhoto: '移除相片', photoBad: '這張相片讀不到，請換一張', picSaved: '頭像已更新 ✓', tapToGrant: '按 🎟 可發票或扣票', usesTickets: '使用', moreLater: '想玩久一點？進行中按 +1 🎟。', hide: '隱藏', show: '顯示', trends: '趨勢 – 最近 8 週', trendsTable: '以表格顯示', hoursOf: '小時', weekOf: '週', skip: '略過', reflect: '做得好！你發現了什麼、做了什麼？', slots: '有毒時段', topTasks: '最多時間',
     addTarget: '＋ 新增目標', short: '短期', long: '長期', due: '到期', daysLeft: '天', dueToday: '今天到期', overdue: '已過期', achieved: '已達成',
     kind: '類型', count: '數量（例如 10 個生字）', hoursKind: '任務時數', milestone: '里程碑（達成 / 未達成）', goal: '目標值', progress: '進度', since: '時數由此日起計', title: '目標',
     events: '未來兩週的活動', noEvents: '未來兩週沒有活動。', allDay: '全日', refresh: '重新整理', chooseCals: '在「設定」選擇日曆。',
@@ -1509,7 +1565,7 @@ const Demo = (() => {
         else if (a === 'calendar') out = events();
         else if (a === 'trends') { T.housekeeping(d, n); out = T.trends(d, 8, n); }
         else if (a === 'getCode') out = { code: '123456' };
-        else if (a === 'export') { const p = req.payload || {}; const keep = (o) => o.date >= p.from && o.date <= p.to && (!p.kid || o.kid === p.kid); T.housekeeping(d, n); save(); out = { from: p.from, to: p.to, plan: clone(d.plan.filter(keep)), done: clone(d.done.filter(keep)), tasks: clone(d.tasks), latest: T.latestRef(d), now: n }; }
+        else if (a === 'export') { if (who.role !== 'parent') throw new Error('Parents only'); const p = req.payload || {}; const keep = (o) => o.date >= p.from && o.date <= p.to && (!p.kid || o.kid === p.kid); T.housekeeping(d, n); save(); out = p.what === 'history' ? { messages: T.historyRows(d), now: n } : { from: p.from, to: p.to, plan: clone(d.plan.filter(keep)), done: clone(d.done.filter(keep)), tasks: clone(d.tasks), messages: T.historyRows(d, p.from, p.to), latest: T.latestRef(d), now: n }; }
         else if (a === 'newCode') throw new Error('Not in the preview');
         else if (a === 'sendReport') throw new Error('Emails start once the Google Sheet version is set up – use Copy as text here.');
         else if (a === 'saveSettings') { if (who.role !== 'parent') throw new Error('Parents only'); const ns = req.payload.settings; ns.kids.forEach((k) => delete k.oldName); ns.parents.forEach((k) => delete k.oldName); d.settings = Object.assign(d.settings, ns); save(); out = view(req.range, who); }
@@ -1538,6 +1594,9 @@ function now() {
 const isParent = () => !!S.parent && S.who === 'parent';
 const kidObj = (name) => (S.v ? S.v.settings.kids.find((k) => k.name === name) : null);
 const curKid = () => (S.who && S.who !== 'parent' ? kidObj(S.who) : null);
+const kidsOnly = () => S.v.settings.kids.filter((k) => !k.adult);
+const selfAdult = () => { const k = curKid(); return !!(k && k.adult && S.parent); };
+const powers = () => isParent() || selfAdult(); // a parent working on their own timetable keeps parent rights
 
 function range() {
   const n = now(), d = S.date || n.date, wk = S.week || T.weekStart(n.date);
@@ -1626,31 +1685,79 @@ function render() {
   const v = $('#view'); v.innerHTML = '';
   if (!S.who) { add(v, el('div', { class: 'card center', style: 'padding:30px 16px' }, el('div', { class: 'big', text: '👋' }), el('h3', { text: t('who') }), el('p', { class: 'muted', text: t('whoHint') }))); return; }
   if (S.who === 'parent' && !S.parent) { add(v, el('div', { class: 'card center', style: 'padding:30px 16px' }, el('div', { class: 'big', text: '🔒' }), el('h3', { text: t('pinTitle') }), el('button', { class: 'btn pri', onclick: () => pinSheet() }, t('unlock')))); return; }
+  if (k && k.adult && !S.parent) { const nm = k.name; add(v, el('div', { class: 'card center', style: 'padding:30px 16px' }, el('div', { class: 'big', text: '🔒' }), el('h3', { text: t('pinTitle') }), el('button', { class: 'btn pri', onclick: () => pinSheet(() => pick(nm)) }, t('unlock')))); return; }
+  if (k && k.adult && !['today', 'week', 'calendar'].includes(S.tab)) S.tab = 'today';
   const views = { today: viewToday, week: viewWeek, plan: viewPlan, report: viewReport, targets: viewTargets, rewards: viewRewards, calendar: viewCalendar, setup: viewSetup };
   if (!views[S.tab] || ((S.tab === 'plan' || S.tab === 'setup') && !isParent())) S.tab = 'today';
   add(v, views[S.tab]());
 }
 function renderPeople() {
   const nav = $('#people'); nav.innerHTML = '';
-  S.v.settings.kids.forEach((k) => {
+  kidsOnly().forEach((k) => {
     const on = S.who === k.name;
-    add(nav, el('button', { class: 'chip' + (on ? ' on' : ''), style: on ? `background:${k.color};border-color:${k.color}` : '', onclick: () => pick(k.name) }, el('span', { class: 'av', text: k.emoji }), k.name));
+    add(nav, el('button', { class: 'chip' + (on ? ' on' : ''), style: on ? `background:${k.color};border-color:${k.color}` : '', title: on ? t('myPic') : k.name, onclick: () => (on ? avatarSheet(k) : pick(k.name)) }, avEl(k), k.name, on ? el('span', { class: 'pen', text: '✏️' }) : null));
   });
   const on = S.who === 'parent';
   const pn = S.parent ? S.v.settings.parents.find((p) => p.name === S.parent) : null;
   add(nav, el('button', { class: 'chip' + (on ? ' on' : ''), style: on ? 'background:#0f766e;border-color:#0f766e' : '', onclick: () => pick('parent') },
     el('span', { class: 'av', text: pn ? pn.emoji : '👪' }), pn ? pn.name : t('parent') + ' 🔒'));
+  if (S.parent) S.v.settings.kids.filter((k) => k.adult).forEach((k) => {
+    const on2 = S.who === k.name;
+    add(nav, el('button', { class: 'chip' + (on2 ? ' on' : ''), style: on2 ? `background:${k.color};border-color:${k.color}` : '', title: t('myDay'), onclick: () => (on2 ? avatarSheet(k) : pick(k.name)) }, avEl(k), '📅 ' + k.name, on2 ? el('span', { class: 'pen', text: '✏️' }) : null));
+  });
+}
+function avEl(k, size) {
+  const s = el('span', { class: 'av', style: size ? `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.6)}px` : '' });
+  if (k.photo) add(s, el('img', { src: k.photo, alt: k.name })); else s.textContent = k.emoji;
+  return s;
+}
+const AV_EMOJI = '🦁🐯🐼🐨🐻🐶🐱🦊🐰🐸🐵🐧🦉🐢🐬🦈🐙🦋🐝🦄🐲🦖🦕🌟⚡🔥🌈🚀⚽🏀🎾🥊🎸🥁🎹🎨🎮👑🤖👾🧙🦸🥷🧚🍀🌸🍓🍩';
+function shrinkPhoto(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const w = img.naturalWidth, h = img.naturalHeight, m = Math.min(w, h);
+      let out = '';
+      for (const px of [128, 104, 88, 72]) {
+        const c = document.createElement('canvas'); c.width = c.height = px;
+        const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, px, px);
+        g.drawImage(img, (w - m) / 2, (h - m) / 2, m, m, 0, 0, px, px);
+        for (const q of [0.82, 0.7, 0.58, 0.46]) { out = c.toDataURL('image/jpeg', q); if (out.length <= 8000) break; }
+        if (out.length <= 8000) break;
+      }
+      URL.revokeObjectURL(url);
+      if (!/^data:image\/jpeg;base64,/.test(out) || out.length > 8000) rej(new Error(t('photoBad'))); else res(out);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error(t('photoBad'))); };
+    img.src = url;
+  });
+}
+function avatarSheet(k) {
+  const box = el('div'), e = el('div', { class: 'err', hidden: true });
+  const done = (p) => act('avatar', Object.assign({ kid: k.name }, p)).then(() => { closeSheet(); render(); toast(t('picSaved')); }).catch((x) => { e.hidden = false; e.textContent = errMsg(x); });
+  add(box, el('div', { class: 'row', style: 'gap:12px;align-items:center' }, avEl(k, 64), el('div', null, el('div', { class: 'stitle', text: t('myPic') }), el('div', { class: 'muted small', text: k.name }))));
+  const file = el('input', { type: 'file', accept: 'image/*', hidden: true });
+  file.addEventListener('change', () => { const f = file.files && file.files[0]; if (!f) return; shrinkPhoto(f).then((ph) => done({ photo: ph })).catch((x) => { e.hidden = false; e.textContent = errMsg(x); }); });
+  add(box, el('div', { class: 'row wrap', style: 'gap:8px;margin-top:12px' }, el('button', { class: 'btn pri', style: `background:${k.color}`, onclick: () => file.click() }, '📷 ' + t('takePhoto')), k.photo ? el('button', { class: 'btn', onclick: () => done({ clear: true }) }, t('removePhoto')) : null, file));
+  add(box, el('label', { class: 'f', text: t('pickIcon') }));
+  const grid = el('div', { class: 'emgrid' });
+  Array.from(AV_EMOJI.match(/\p{Extended_Pictographic}\uFE0F?/gu) || []).forEach((x) => add(grid, el('button', { class: 'emb' + (!k.photo && x === k.emoji ? ' on' : ''), onclick: () => done(k.photo ? { emoji: x, clear: true } : { emoji: x }) }, x)));
+  add(box, [grid, e, el('div', { class: 'sbtns' }, el('button', { class: 'btn', onclick: closeSheet }, t('cancel')))]);
+  openSheet(box);
 }
 function pick(w) {
   if (w === 'parent' && !S.parent) { pinSheet(() => pick('parent')); return; }
+  const m = w !== 'parent' ? kidObj(w) : null;
+  if (m && m.adult && !S.parent) { pinSheet(() => pick(w)); return; }
   S.who = w; store.set('fp2-who', w);
   if (!isParent() && (S.tab === 'plan' || S.tab === 'setup')) S.tab = 'today';
   S.scrolled = false; render();
 }
 function renderTabs() {
   const nav = $('#tabs'); nav.innerHTML = '';
-  nav.hidden = !S.who || (S.who === 'parent' && !S.parent);
-  const tabs = isParent() ? ['today', 'week', 'plan', 'report', 'targets', 'rewards', 'calendar', 'setup'] : ['today', 'week', 'report', 'targets', 'rewards', 'calendar'];
+  const ck = curKid();
+  nav.hidden = !S.who || (S.who === 'parent' && !S.parent) || !!(ck && ck.adult && !S.parent);
+  const tabs = isParent() ? ['today', 'week', 'plan', 'report', 'targets', 'rewards', 'calendar', 'setup'] : ck && ck.adult ? ['today', 'week', 'calendar'] : ['today', 'week', 'report', 'targets', 'rewards', 'calendar'];
   tabs.forEach((k) => add(nav, el('button', { class: 'tab' + (S.tab === k ? ' on' : ''), onclick: () => { S.tab = k; S.draft = null; S.tasksDraft = null; S.tplDraft = null; S.rwDraft = null; S.scrolled = false; render(); window.scrollTo(0, 0); } }, t(k))));
 }
 function renderPair(msg) {
@@ -1816,7 +1923,7 @@ function dayNav() {
 function viewToday() {
   const wrap = el('div'), k = curKid(), n = now(), d = S.date;
   add(wrap, dayNav());
-  const kids = k ? [k] : S.v.settings.kids;
+  const kids = k ? [k] : kidsOnly();
   if (k && d === n.date) add(wrap, nowCard(k));
   if (!k) kids.forEach((kk) => add(wrap, parentStrip(kk)));
   const calBox = calendarPoints(d);
@@ -1832,7 +1939,8 @@ function viewToday() {
   add(card, timetable({ lanes, squeeze: !!k }));
   add(wrap, card);
   add(wrap, el('div', { class: 'muted small center', text: t('tapHelp') }));
-  if (isParent()) add(wrap, el('div', { class: 'row wrap noprint', style: 'margin-top:10px;justify-content:center' }, el('button', { class: 'btn sm', onclick: () => planEditSheet({ kid: S.v.settings.kids[0].name, date: d, from: '16:00', to: '16:30' }) }, t('addPlan')), ...S.v.settings.kids.map((kk) => el('button', { class: 'btn sm', onclick: () => didSheet(kk) }, t('iDid') + ' · ' + kk.name))));
+  if (isParent()) add(wrap, el('div', { class: 'row wrap noprint', style: 'margin-top:10px;justify-content:center' }, el('button', { class: 'btn sm', onclick: () => planEditSheet({ kid: S.v.settings.kids[0].name, date: d, from: '16:00', to: '16:30' }) }, t('addPlan')), ...kidsOnly().map((kk) => el('button', { class: 'btn sm', onclick: () => didSheet(kk) }, t('iDid') + ' · ' + kk.name))));
+  if (selfAdult()) add(wrap, el('div', { class: 'row wrap noprint', style: 'margin-top:10px;justify-content:center' }, el('button', { class: 'btn sm', onclick: () => planEditSheet({ kid: k.name, date: d, from: n.time.slice(0, 3) + '00', to: T.fromMin(Math.min(1439, T.toMin(n.time.slice(0, 3) + '00') + 60)) }) }, t('addPlan'))));
   if (!S.scrolled && d === n.date) { S.scrolled = true; setTimeout(() => { const nl = document.querySelector('.nowline'); if (nl) { const y = nl.getBoundingClientRect().top + window.scrollY - window.innerHeight * 0.35; window.scrollTo({ top: Math.max(0, y) }); } }, 30); }
   return wrap;
 }
@@ -1840,20 +1948,30 @@ function ticketStrip(kid) {
   const d = db(), bal = T.balance(d, kid.name);
   const y = d.cards.filter((c) => c.kid === kid.name && c.color === 'Yellow' && c.status === 'Active').length;
   const r = d.cards.filter((c) => c.kid === kid.name && c.color === 'Red' && c.status === 'Active').reduce((s, c) => s + (+c.count || 1), 0);
-  return el('div', { class: 'strip' }, el('span', { class: 'stat', style: bal < 0 ? 'color:var(--bad)' : '', text: '🎟 ' + bal }), el('span', { class: 'stat', text: '🟨 ' + y }), el('span', { class: 'stat', text: '🟥 ' + r }));
+  const tix = isParent() ? el('button', { class: 'stat', style: 'border:0;cursor:pointer;' + (bal < 0 ? 'color:var(--bad)' : ''), title: t('grant'), onclick: () => ticketSheet(kid) }, '🎟 ' + bal + ' ±') : el('span', { class: 'stat', style: bal < 0 ? 'color:var(--bad)' : '', text: '🎟 ' + bal });
+  return el('div', { class: 'strip' }, tix, el('span', { class: 'stat', text: '🟨 ' + y }), el('span', { class: 'stat', text: '🟥 ' + r }));
 }
 function nowCard(k) {
   const d = db(), n = now();
   const run = T.running(d, k.name)[0];
   const box = el('div', { class: 'now', style: `background:${k.color}` });
   if (run) {
-    const tk = T.taskOf(d, run.task), poison = tk.nature === 'Toxic';
-    const el2 = el('div', { class: 'clock', 'data-run': run.ref });
-    add(box, [el('div', { class: 's', text: t('now') + ' · ' + nat(tk.nature) }), el('div', { class: 't', text: tk.emoji + ' ' + run.task }), el('div', { class: 's', text: t('started') + ' ' + run.from + (poison ? ' · ' + run.tickets + ' 🎟 = ' + run.tickets * 15 + ' min' : '') }), el2]);
+    const tk = T.taskOf(d, run.task), poison = tk.nature === 'Toxic' && !k.adult;
+    const el2 = el('div', { class: 'clock', 'data-run': run.ref }), due = timerDue(run);
+    add(box, [el('div', { class: 's', text: t('now') + ' · ' + nat(tk.nature) }), el('div', { class: 't', text: tk.emoji + ' ' + run.task }),
+      el('div', { class: 's', text: t('started') + ' ' + run.from + (due != null ? ' · ' + t('endsAt') + ' ' + T.fromMin(((due % 1440) + 1440) % 1440) : '') + (poison ? ' · ' + run.tickets + ' 🎟 = ' + run.tickets * 15 + ' min' : '') }), el2,
+      el('div', { class: 's small tup', 'data-tup': run.ref, hidden: true, text: t('timesUpHint') })]);
     if (poison) add(box, el('div', { class: 's small', text: t('overWarn') }));
+    if (due == null || S.timers[run.ref]) {
+      const ab = el('div', { class: 'alarmset' }, el('span', { class: 's small', text: S.timers[run.ref] ? '⏰ ' + T.fromMin(((S.timers[run.ref] % 1440) + 1440) % 1440) : t('noEnd') }));
+      [10, 15, 20, 30, 45, 60].forEach((m) => add(ab, el('button', { class: 'btn sm', onclick: () => { S.timers[run.ref] = Math.floor(nowSec() / 60) + m; store.set('fp2-timers', S.timers); audioCtx(); render(); } }, m + "'")));
+      if (S.timers[run.ref]) add(ab, el('button', { class: 'btn sm', onclick: () => { delete S.timers[run.ref]; store.set('fp2-timers', S.timers); render(); } }, '✕'));
+      add(box, ab);
+    }
     updateClock(el2, run, box);
     add(box, el('div', { class: 'btns' },
       el('button', { class: 'btn w', onclick: () => doFinish(run) }, t('finish')),
+      el('button', { class: 'btn', title: AL.on ? t('soundOn') : t('soundOff'), 'aria-label': AL.on ? t('soundOn') : t('soundOff'), onclick: () => { AL.on = !AL.on; store.set('fp2-sound', AL.on ? 'on' : 'off'); if (AL.on) beep3(1); render(); toast(AL.on ? '🔔 ' + t('soundOn') : '🔕 ' + t('soundOff')); } }, AL.on ? '🔔' : '🔕'),
       poison ? el('button', { class: 'btn', onclick: () => act('extend', { ref: run.ref, tickets: 1 }).then(() => render()).catch((e) => toast(errMsg(e))) }, t('moreTime')) : null,
       tk.link ? el('a', { class: 'btn', href: T.safeUrl(tk.link), target: '_blank', rel: 'noopener' }, t('open')) : null,
       el('button', { class: 'btn', onclick: () => runSheet(run) }, '⋯')));
@@ -1863,28 +1981,86 @@ function nowCard(k) {
     if (next) {
       const tk = T.taskOf(d, next.task), st = T.planState(d, next, n);
       add(box, [el('div', { class: 's', text: (st.state === 'upcoming' ? t('next') : t('now')) + ' · ' + next.from + '–' + next.to }), el('div', { class: 't', text: tk.emoji + ' ' + next.task })]);
-      if (tk.nature === 'Toxic') { const ss = T.slotState(d, next, n); add(box, el('div', { class: 's', text: ss.state === 'earned' ? '✅ ' + ss.n + ' 🎟 ' + t('earned') : ss.need.length ? t('poisonNeeds') + ' ' + ss.n + ' 🎟: ' + ss.need.map((q) => q.task).join(', ') : '' })); }
+      if (tk.nature === 'Toxic' && !k.adult) { const ss = T.slotState(d, next, n); add(box, el('div', { class: 's', text: ss.state === 'earned' ? '✅ ' + ss.n + ' 🎟 ' + t('earned') : ss.need.length ? t('poisonNeeds') + ' ' + ss.n + ' 🎟: ' + ss.need.map((q) => q.task).join(', ') : '' })); }
       add(box, el('div', { class: 'btns' }, el('button', { class: 'btn w', onclick: () => startSheet(k, next.task, next) }, t('startNow')), tk.link ? el('a', { class: 'btn', href: T.safeUrl(tk.link), target: '_blank', rel: 'noopener' }, t('open')) : null, el('button', { class: 'btn', onclick: () => planSheet(next) }, '⋯')));
     } else {
       add(box, el('div', { class: 't', text: today.length ? t('allDone') : t('freeNow') }));
     }
   }
-  add(box, el('div', { style: 'margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center' }, ticketStrip(k), el('button', { class: 'btn sm', style: 'background:rgba(255,255,255,.2);color:#fff', onclick: () => didSheet(k) }, t('iDid'))));
+  add(box, el('div', { style: 'margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center' }, k.adult ? null : ticketStrip(k), el('button', { class: 'btn sm', style: 'background:rgba(255,255,255,.2);color:#fff', onclick: () => didSheet(k) }, t('iDid'))));
   return box;
 }
+/* ---------- live timer + 3-second alarm ---------- */
+const AL = { ctx: null, on: store.get('fp2-sound', 'on') !== 'off', fired: store.get('fp2-alarmed', {}) || {} };
+S.timers = store.get('fp2-timers', {}) || {};
+function audioCtx() {
+  const C = window.AudioContext || window.webkitAudioContext; if (!C) return null;
+  try { if (!AL.ctx) AL.ctx = new C(); if (AL.ctx.state === 'suspended') AL.ctx.resume(); } catch (e) { return null; }
+  return AL.ctx;
+}
+document.addEventListener('pointerdown', () => { if (AL.on) audioCtx(); }, { passive: true }); // iPads only allow sound after a tap
+function beep3(short) { // 6 beeps over 3 seconds (1 beep for a test)
+  const c = audioCtx(); if (!c) return;
+  const t0 = c.currentTime + 0.05;
+  for (let i = 0; i < (short ? 1 : 6); i++) {
+    const o = c.createOscillator(), g = c.createGain(), st = t0 + i * 0.5;
+    o.type = 'sine'; o.frequency.value = i % 2 ? 1175 : 880;
+    g.gain.setValueAtTime(0.0001, st); g.gain.exponentialRampToValueAtTime(0.5, st + 0.02); g.gain.setValueAtTime(0.5, st + 0.3); g.gain.exponentialRampToValueAtTime(0.0001, st + 0.4);
+    o.connect(g); g.connect(c.destination); o.start(st); o.stop(st + 0.42);
+  }
+}
+function nowSec() { // device clock (for the seconds), unless it disagrees with the family's server clock
+  const d = new Date(), n = localNow(), dev = T.abs(n.date, n.time) * 60 + d.getSeconds();
+  if (MODE === 'demo' || !S.v || !S.v.now) return dev;
+  const sv = T.abs(S.v.now.date, S.v.now.time) * 60 + Math.floor((Date.now() - S.loadedAt) / 1000);
+  return Math.abs(dev - sv) > 120 ? sv : dev;
+}
+function timerDue(w) { // when this session should finish (absolute minutes), or null when nothing was set
+  const d = db(), k = kidObj(w.kid);
+  if (S.timers[w.ref]) return S.timers[w.ref];
+  if (T.natureOf(d, w.task) === 'Toxic' && !(k && k.adult)) return T.dueEnd(d, w);
+  if (w.planRef && d.plan.some((p) => p.ref === w.planRef)) return T.dueEnd(d, w);
+  return null;
+}
+function clockText(sec) { sec = Math.max(0, Math.floor(sec)); const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), x = sec % 60; return (h ? h + ':' + T.pad(m) : String(m)) + ':' + T.pad(x); }
 function updateClock(node, run, box) {
-  const d = db(), n = now(), poison = T.natureOf(d, run.task) === 'Toxic';
-  const el2 = T.abs(n.date, n.time) - T.abs(run.date, run.from);
-  if (poison) {
-    const left = (+run.tickets || 0) * 15 - el2;
-    node.textContent = left >= 0 ? t('timeLeft') + ' ' + left + ' min' : '+' + (-left) + ' min ' + t('over') + (-left >= 15 ? ' 🟥' : -left >= 3 ? ' 🟨' : '');
-    if (box) box.classList.toggle('over', left < 0);
-  } else node.textContent = T.hm(el2);
+  const k = kidObj(run.kid), due = timerDue(run), ns = nowSec(), tox = T.natureOf(db(), run.task) === 'Toxic' && !(k && k.adult);
+  if (due == null) { node.textContent = '⏱ ' + clockText(ns - T.abs(run.date, run.from) * 60); if (box) box.classList.remove('over', 'due'); return; }
+  const left = due * 60 - ns, om = Math.floor(-left / 60);
+  node.textContent = left > 0 ? '⏳ ' + clockText(left) : '⏰ +' + clockText(-left) + (tox ? (om >= 15 ? ' 🟥' : om >= 3 ? ' 🟨' : '') : '');
+  node.classList.toggle('late', left <= 0);
+  if (box) { box.classList.toggle('over', tox && left < 0); box.classList.toggle('due', !tox && left <= 0); const tu = box.querySelector('[data-tup]'); if (tu) tu.hidden = left > 0; }
+}
+function ring(w) {
+  if (AL.on) beep3();
+  try { if (navigator.vibrate) navigator.vibrate([400, 100, 400, 100, 400]); } catch (e) {}
+  toast('⏰ ' + t('timesUp') + ' ' + T.taskOf(db(), w.task).emoji + ' ' + w.task);
+  const b = document.querySelector('.now'); if (b) { b.classList.remove('ring'); void b.offsetWidth; b.classList.add('ring'); }
+}
+function checkAlarms() { // only on the screen of the person doing the task
+  const k = curKid(); if (!S.v || !k || (k.adult && !S.parent)) return;
+  const ns = nowSec();
+  T.running(db(), k.name).forEach((w) => {
+    const due = timerDue(w); if (due == null) return;
+    const key = w.ref + '@' + due, left = due * 60 - ns;
+    if (left > 0 || AL.fired[key]) return;
+    AL.fired[key] = Date.now();
+    Object.keys(AL.fired).forEach((x) => { if (Date.now() - AL.fired[x] > 3 * 86400000) delete AL.fired[x]; });
+    store.set('fp2-alarmed', AL.fired);
+    if (-left <= 600) ring(w); // opened much later: no sound
+  });
+}
+let WL = null, wlBusy = false;
+function wakeSync() { // keep the screen on while a timer is running, so the alarm can sound
+  if (!navigator.wakeLock || wlBusy) return;
+  const k = curKid(), need = !!(S.v && k && document.visibilityState === 'visible' && T.running(db(), k.name).length);
+  if (need && !WL) { wlBusy = true; navigator.wakeLock.request('screen').then((l) => { WL = l; l.addEventListener('release', () => { WL = null; }); }).catch(() => {}).finally(() => { wlBusy = false; }); }
+  if (!need && WL) { WL.release().catch(() => {}); WL = null; }
 }
 function parentStrip(k) {
   const d = db(), run = T.running(d, k.name)[0];
   return el('div', { class: 'card spread', style: `padding:10px 12px;box-shadow:0 0 0 2px ${tint(k.color, .4)}` },
-    el('div', { class: 'b' }, k.emoji + ' ' + k.name + (run ? ' · ' + T.taskOf(d, run.task).emoji + ' ' + run.task + ' (' + run.from + '…)' : '')),
+    el('div', { class: 'b' }, k.emoji + ' ' + k.name + (run ? ' · ' + T.taskOf(d, run.task).emoji + ' ' + run.task + ' (' + run.from + '…) ' : ''), run ? el('span', { class: 'mini', 'data-run': run.ref }) : null),
     ticketStrip(k));
 }
 
@@ -1905,7 +2081,7 @@ function calendarPoints(d) {
 /* ================= sheets for blocks ================= */
 function stateLabel(st) { return { upcoming: t('upcoming'), now: t('nowState'), running: t('running'), done: t('done'), changed: t('changed'), cancelled: t('cancelled'), missed: t('missed') }[st] || st; }
 function sheetHead(task, sub) { const tk = T.taskOf(db(), task); return [el('div', { class: 'stitle', text: tk.emoji + ' ' + task }), el('div', { class: 'row wrap', style: 'margin-top:4px' }, el('span', { class: 'pill', style: `background:${tint(T.NATURE_COLOR[tk.nature], .15)};color:${T.NATURE_COLOR[tk.nature]}`, text: nat(tk.nature) }), el('span', { class: 'muted small', text: sub }))]; }
-function canAct(kidName, date) { const n = now(); return isParent() || (S.who === kidName && date >= T.addDays(n.date, -1) && date <= n.date); }
+function canAct(kidName, date) { const n = now(); return powers() || (S.who === kidName && date >= T.addDays(n.date, -1) && date <= n.date); }
 function planSheet(p) {
   const d = db(), n = now(), st = T.planState(d, p, n), tk = T.taskOf(d, p.task), box = el('div');
   add(box, sheetHead(p.task, p.kid + ' · ' + dlong(p.date) + ' · ' + p.from + '–' + p.to + ' · ' + stateLabel(st.state)));
@@ -1916,8 +2092,8 @@ function planSheet(p) {
     add(A, el('button', { class: 'btn', onclick: () => (st.w.status === 'Running' ? runSheet(st.w) : doneSheet(st.w)) }, t('edit') + ' →'));
   } else if (st.state === 'cancelled') {
     add(box, el('div', { class: 'muted', style: 'margin-top:8px', text: t('cancelled') + (st.w.note ? ': ' + st.w.note : '') }));
-    if (isParent()) add(A, el('button', { class: 'btn bad', onclick: () => act('delDone', { ref: st.w.ref }).then(() => { closeSheet(); render(); }).catch((e) => toast(errMsg(e))) }, t('del') + ' (' + t('cancelled') + ')'));
-  } else if (canAct(p.kid, p.date) && (isParent() || p.date === n.date)) {
+    if (powers()) add(A, el('button', { class: 'btn bad', onclick: () => act('delDone', { ref: st.w.ref }).then(() => { closeSheet(); render(); }).catch((e) => toast(errMsg(e))) }, t('del') + ' (' + t('cancelled') + ')'));
+  } else if (canAct(p.kid, p.date) && (powers() || p.date === n.date)) {
     if (tk.nature === 'Living') add(box, el('p', { class: 'muted small', text: t('autoLiving') }));
     const k = kidObj(p.kid);
     if (tk.nature === 'Toxic') {
@@ -1926,13 +2102,13 @@ function planSheet(p) {
     }
     add(A, [el('button', { class: 'btn pri', style: `background:${k.color}`, onclick: () => startSheet(k, p.task, p) }, t('startNow') + ' / ' + t('startAt')),
       tk.link ? el('a', { class: 'btn', href: T.safeUrl(tk.link), target: '_blank', rel: 'noopener' }, t('open')) : null,
-      el('button', { class: 'btn', onclick: () => taskPicker(p.task, (task) => startSheet(k, task, p), tk.nature === 'Toxic' || isParent()) }, t('doElse')),
+      el('button', { class: 'btn', onclick: () => taskPicker(p.task, (task) => startSheet(k, task, p), tk.nature === 'Toxic' || powers()) }, t('doElse')),
       tk.nature !== 'Toxic' ? el('button', { class: 'btn', onclick: () => didSheet(k, p) }, t('didIt')) : null,
-      tk.nature !== 'Living' || isParent() ? el('button', { class: 'btn bad', onclick: () => cancelSheet(p) }, t('cancelTask')) : null]);
+      tk.nature !== 'Living' || powers() ? el('button', { class: 'btn bad', onclick: () => cancelSheet(p) }, t('cancelTask')) : null]);
   } else if (tk.nature === 'Living') {
     add(box, el('p', { class: 'muted', text: t('autoLiving') }));
   }
-  if (isParent()) add(A, el('div', { class: 'grid2' }, el('button', { class: 'btn', onclick: () => planEditSheet(p) }, t('editPlan')), el('button', { class: 'btn bad', onclick: () => twoTap('dp' + p.ref, () => act('delPlan', { ref: p.ref }).then(() => { closeSheet(); render(); toast(t('removed')); }).catch((e) => toast(errMsg(e)))) }, t('deletePlan'))));
+  if (powers()) add(A, el('div', { class: 'grid2' }, el('button', { class: 'btn', onclick: () => planEditSheet(p) }, t('editPlan')), el('button', { class: 'btn bad', onclick: () => twoTap('dp' + p.ref, () => act('delPlan', { ref: p.ref }).then(() => { closeSheet(); render(); toast(t('removed')); }).catch((e) => toast(errMsg(e)))) }, t('deletePlan'))));
   add(box, A);
   add(box, el('div', { class: 'sbtns' }, el('button', { class: 'btn', onclick: closeSheet }, t('close'))));
   openSheet(box);
@@ -1945,7 +2121,7 @@ function slotWarn(table, kid, date, from, to, exclude) {
     const os = T.abs(o.date, o.from), oe = os + T.span(o.from, o.to);
     if (!(os < ne && ns < oe)) return;
     const nm = T.taskOf(d, o.task).emoji + ' ' + o.task + ' ' + o.from + '–' + o.to;
-    if (table === 'done' && !isParent() && T.natureOf(d, o.task) === 'Toxic') out.push({ bad: true, text: '⛔ ' + nm + ' – ' + t('toxicAsk') });
+    if (table === 'done' && !powers() && T.natureOf(d, o.task) === 'Toxic') out.push({ bad: true, text: '⛔ ' + nm + ' – ' + t('toxicAsk') });
     else if (ns <= os && ne >= oe) out.push({ text: '✕ ' + nm + ' → ' + t('wReplaced') });
     else if (ns <= os) out.push({ text: '✂️ ' + nm + ' → ' + T.fromMin(ne) + '–' + o.to });
     else if (ne >= oe) out.push({ text: '✂️ ' + nm + ' → ' + o.from + '–' + T.fromMin(ns) });
@@ -1965,7 +2141,7 @@ function warnBox() {
 function savedToast(d) { const c = d && d.result && d.result.changed; toast(c ? '✂️ ' + c + ' ' + (LANG === 'en' && c === 1 ? 'older entry changed – see History' : t('olderChanged')) : t('saved')); }
 function timeField(val) { return el('input', { type: 'time', value: val, step: '60' }); }
 function startSheet(k, task, plan) {
-  const d = db(), n = now(), tk = T.taskOf(d, task), poison = tk.nature === 'Toxic', box = el('div');
+  const d = db(), n = now(), tk = T.taskOf(d, task), poison = tk.nature === 'Toxic' && !k.adult, box = el('div');
   add(box, sheetHead(task, k.emoji + ' ' + k.name + (plan ? ' · ' + t('planned') + ' ' + plan.from + '–' + plan.to : '')));
   let when = 'now';
   const tf = timeField(plan && T.toMin(plan.from) < T.toMin(n.time) && plan.date === n.date ? plan.from : n.time);
@@ -1988,7 +2164,8 @@ function startSheet(k, task, plan) {
   const go = (finishRunning) => {
     const p = { kid: k.name, task, planRef: plan ? plan.ref : '', tickets: nT, finishRunning: !!finishRunning };
     if (when === 'at') p.at = tf.value;
-    if (isParent() && plan) p.date = plan.date;
+    if (powers() && plan) p.date = plan.date;
+    audioCtx();
     act('start', p).then(() => { closeSheet(); S.scrolled = false; render(); toast('▶ ' + task); }).catch((x) => {
       const m = x.message || '';
       if (m.startsWith('RUNNING:')) { openSheet(el('div', null, el('div', { class: 'stitle', text: t('stillDoing') + ' ' + m.slice(8) }), el('p', { class: 'muted', text: t('finishAndStart') + ' ' + task + '?' }), el('div', { class: 'sbtns' }, el('button', { class: 'btn', onclick: closeSheet }, t('cancel')), el('button', { class: 'btn pri', style: `background:${k.color}`, onclick: () => go(true) }, t('yes'))))); return; }
@@ -2013,7 +2190,7 @@ function reflectSheet(w) {
   setTimeout(() => ta.focus(), 80);
 }
 function runSheet(w) {
-  const d = db(), tk = T.taskOf(d, w.task), poison = tk.nature === 'Toxic', box = el('div');
+  const d = db(), tk = T.taskOf(d, w.task), poison = tk.nature === 'Toxic' && !T.isAdult(d, w.kid), box = el('div');
   add(box, sheetHead(w.task, w.kid + ' · ' + t('started') + ' ' + w.from + (poison ? ' · ' + w.tickets + ' 🎟' : '')));
   const clock = el('div', { class: 'cnt', style: 'margin-top:8px' }); updateClock(clock, w);
   add(box, clock);
@@ -2024,7 +2201,7 @@ function runSheet(w) {
     el('button', { class: 'btn pri', style: `background:${k.color}`, onclick: () => { closeSheet(); doFinish(w); } }, t('finishNow')),
     el('button', { class: 'btn', onclick: () => { if (tf.hidden) { tf.hidden = false; tf.focus(); return; } act('finish', { ref: w.ref, at: tf.value }).then(() => { closeSheet(); render(); }).catch((e) => toast(errMsg(e))); } }, t('finishAt')), tf,
     poison ? el('button', { class: 'btn', onclick: () => act('extend', { ref: w.ref, tickets: 1 }).then(() => { closeSheet(); render(); }).catch((e) => toast(errMsg(e))) }, t('moreTime')) : null,
-    !poison || isParent() ? el('button', { class: 'btn', onclick: () => taskPicker(w.task, (task) => act('change', { ref: w.ref, task }).then(() => { closeSheet(); render(); }).catch((e) => toast(errMsg(e))), isParent()) }, t('changeTask')) : null,
+    !poison || powers() ? el('button', { class: 'btn', onclick: () => taskPicker(w.task, (task) => act('change', { ref: w.ref, task }).then(() => { closeSheet(); render(); }).catch((e) => toast(errMsg(e))), powers()) }, t('changeTask')) : null,
     el('button', { class: 'btn bad', onclick: () => twoTap('cr' + w.ref, () => act('cancel', { ref: w.ref }).then(() => { closeSheet(); render(); }).catch((e) => toast(errMsg(e)))) }, t('cancelRun'))));
   add(box, el('div', { class: 'sbtns' }, el('button', { class: 'btn', onclick: closeSheet }, t('close'))));
   openSheet(box);
@@ -2036,11 +2213,11 @@ function doneSheet(w) {
     el('div', { class: 'b', text: t('result') + ': ' + (w.result || '') }),
     el('div', { class: 'muted small', text: 'Ref ' + w.ref + (w.planRef ? ' · Plan ' + w.planRef : '') + ' · ' + w.by + (w.made ? ' · ' + t('createdAt') + ' ' + w.made : '') + (poison ? ' · ' + w.tickets + ' 🎟' + (w.overrun ? ' · +' + w.overrun + 'm' : '') : '') + (w.card ? ' · ' + w.card : '') }),
     w.note ? el('div', { style: 'margin-top:4px', text: '📝 ' + w.note }) : null));
-  const editable = isParent() || (S.who === w.kid && !poison && w.date >= T.addDays(n.date, -1));
+  const editable = powers() || (S.who === w.kid && !poison && w.date >= T.addDays(n.date, -1));
   if (editable) {
     const f = timeField(w.from), to = timeField(w.to), note = el('input', { type: 'text', value: w.note || '', maxlength: '300' });
     let task = w.task;
-    const tb = el('button', { class: 'btn full', style: 'justify-content:flex-start', onclick: () => taskPicker(task, (x) => { task = x; tb.textContent = T.taskOf(d, x).emoji + ' ' + x; openSheet(box); }, isParent()) }, tk.emoji + ' ' + w.task);
+    const tb = el('button', { class: 'btn full', style: 'justify-content:flex-start', onclick: () => taskPicker(task, (x) => { task = x; tb.textContent = T.taskOf(d, x).emoji + ' ' + x; openSheet(box); }, powers()) }, tk.emoji + ' ' + w.task);
     add(box, [el('label', { class: 'f', text: t('task') }), tb, el('div', { class: 'grid2' }, el('div', null, el('label', { class: 'f', text: t('from') }), f), el('div', null, el('label', { class: 'f', text: t('to') }), to)), el('label', { class: 'f', text: t('noteDone') }), note]);
     add(box, el('div', { class: 'sbtns' },
       el('button', { class: 'btn bad', onclick: () => twoTap('dd' + w.ref, () => act('delDone', { ref: w.ref }).then(() => { closeSheet(); render(); toast(t('removed')); }).catch((e) => toast(errMsg(e)))) }, t('del')),
@@ -2076,19 +2253,19 @@ function didSheet(k, plan, presetDate) {
   const kidSel = isParent() && !plan ? kidSelect(k.name) : null;
   const tix = el('input', { type: 'number', min: '0', step: '1', value: '' });
   const tixWrap = el('div', { hidden: true }, el('label', { class: 'f', text: t('ticketsUsed') + ' (1 = 15 min)' }), tix);
-  const syncTix = () => { const tox = task && T.natureOf(d, task) === 'Toxic' && isParent(); tixWrap.hidden = !tox; if (tox && tix.value === '') tix.value = String(Math.max(1, Math.ceil(T.span(f.value, to.value) / 15))); };
+  const syncTix = () => { const tox = task && T.natureOf(d, task) === 'Toxic' && isParent() && !T.isAdult(d, kidSel ? kidSel.value : k.name); tixWrap.hidden = !tox; if (tox && tix.value === '') tix.value = String(Math.max(1, Math.ceil(T.span(f.value, to.value) / 15))); };
   const f = timeField(plan ? plan.from : T.fromMin(Math.max(0, T.toMin(n.time) - 30))), to = timeField(plan ? plan.to : n.time);
   const note = el('textarea', { maxlength: '300', placeholder: t('notePh'), style: 'min-height:60px' });
   const tb = el('button', { class: 'btn full', style: 'justify-content:flex-start' }, task ? T.taskOf(d, task).emoji + ' ' + task : t('pickTask'));
-  tb.addEventListener('click', () => taskPicker(task, (x) => { task = x; tb.textContent = T.taskOf(d, x).emoji + ' ' + x; syncTix(); openSheet(box); }, isParent()));
-  const dates = isParent() ? null : el('div', { class: 'opts' });
-  const dateIn = isParent() ? el('input', { type: 'date', value: date }) : null;
+  tb.addEventListener('click', () => taskPicker(task, (x) => { task = x; tb.textContent = T.taskOf(d, x).emoji + ' ' + x; syncTix(); openSheet(box); }, powers()));
+  const dates = powers() ? null : el('div', { class: 'opts' });
+  const dateIn = powers() ? el('input', { type: 'date', value: date }) : null;
   const wb = warnBox();
   const updW = () => wb.update(slotWarn('done', kidSel ? kidSel.value : k.name, dateIn ? dateIn.value : date, f.value, to.value, ''));
   const drawD = () => { if (!dates) return; dates.innerHTML = ''; [n.date, T.addDays(n.date, -1)].forEach((x) => add(dates, el('button', { class: 'opt' + (date === x ? ' on' : ''), onclick: () => { date = x; drawD(); updW(); } }, x === n.date ? t('today') : t('yesterday')))); };
   drawD();
   const e = el('div', { class: 'err', hidden: true });
-  add(box, [el('div', { class: 'stitle', text: plan ? t('didIt') : isParent() ? t('addDone') : t('iDid') }), kidSel ? [el('label', { class: 'f', text: t('kid') }), kidSel] : el('div', { class: 'muted', text: k.emoji + ' ' + k.name }),
+  add(box, [el('div', { class: 'stitle', text: plan ? t('didIt') : powers() ? t('addDone') : t('iDid') }), kidSel ? [el('label', { class: 'f', text: t('kid') }), kidSel] : el('div', { class: 'muted', text: k.emoji + ' ' + k.name }),
     el('label', { class: 'f', text: t('task') }), tb, el('label', { class: 'f', text: t('date') }), dates || dateIn,
     el('div', { class: 'grid2' }, el('div', null, el('label', { class: 'f', text: t('from') }), f), el('div', null, el('label', { class: 'f', text: t('to') }), to)),
     tixWrap, el('label', { class: 'f', text: t('noteDone') }), note, wb, e,
@@ -2262,6 +2439,24 @@ function sheetOf(X, table, rows) {
   ws['!cols'] = cols.map((c) => ({ wch: Math.max(9, c[1].length + 2, c[0] === 'task' || c[0] === 'name' ? 24 : 0, c[0] === 'note' || c[0] === 'result' ? 28 : 0) }));
   return ws;
 }
+function historySheet(X, list) {
+  const toSerial = (st) => { const m = /^(\d\d)\/(\d\d)\/(\d{4}) (\d\d):(\d\d)/.exec(st || ''); return m ? serial(m[3] + '-' + m[2] + '-' + m[1]) + (+m[4] * 60 + +m[5]) / 1440 : null; };
+  const aoa = [['Time', 'Type', 'Message', 'Related Refs', 'By', 'State']].concat(list.map((m) => { const v = toSerial(m.time); return [v == null ? m.time : { t: 'n', v, z: 'dd/mm/yyyy hh:mm' }, m.type, m.text, m.refs || '', m.by || '', m.state || '']; }));
+  const ws = X.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 17 }, { wch: 12 }, { wch: 80 }, { wch: 16 }, { wch: 10 }, { wch: 10 }];
+  ws['!autofilter'] = { ref: 'A1:F' + Math.max(2, aoa.length) };
+  return ws;
+}
+function exportHistory(btn) {
+  if (btn) btn.disabled = true;
+  Promise.all([loadXLSX(), call('export', { what: 'history' })]).then(([XL, data]) => {
+    const wb = XL.utils.book_new();
+    XL.utils.book_append_sheet(wb, historySheet(XL, data.messages || []), 'History');
+    const n = data.now || now(), name = 'family-planner_history_' + n.date + '.xlsx';
+    XL.writeFile(wb, name);
+    toast(S.v.demo ? t('previewNoDownload') : '⬇️ ' + name);
+  }).catch((e) => toast(errMsg(e))).finally(() => { if (btn) btn.disabled = false; });
+}
 function excelView() {
   const wrap = el('div'), n = now();
   if (!S.xls) S.xls = { from: S.week, to: T.addDays(S.week, 6), kid: '' };
@@ -2278,7 +2473,8 @@ function excelView() {
       XL.utils.book_append_sheet(wb, sheetOf(XL, 'plan', data.plan.sort(T.sortPlans)), 'Planning');
       XL.utils.book_append_sheet(wb, sheetOf(XL, 'done', data.done.sort((a, b) => ((a.date + (a.from || '')) < (b.date + (b.from || '')) ? -1 : 1))), 'Workdone');
       XL.utils.book_append_sheet(wb, sheetOf(XL, 'tasks', data.tasks), 'Tasks');
-      XL.utils.book_append_sheet(wb, XL.utils.aoa_to_sheet([['Family Planner export'], ['Exported at', T.stamp(data.now || n)], ['From', T.uk(data.from)], ['To', T.uk(data.to)], [t('latestRef'), T.pad(data.latest, 5)], ['Next free Entry Ref', T.pad(data.latest + 1, 5)], [''], ['Import tips'], ['Leave Entry Ref empty on new rows – the app numbers them.'], ['Rows with a used Entry Ref, an unknown child/task, bad dates/times or overlapping times are blocked.'], ['Result, Minutes, Overrun and Card are worked out again by the app.']]), 'Info');
+      XL.utils.book_append_sheet(wb, historySheet(XL, data.messages || []), 'History');
+      XL.utils.book_append_sheet(wb, XL.utils.aoa_to_sheet([['Family Planner export'], ['Exported at', T.stamp(data.now || n)], ['From', T.uk(data.from)], ['To', T.uk(data.to)], [t('latestRef'), T.pad(data.latest, 5)], ['Next free Entry Ref', T.pad(data.latest + 1, 5)], [''], ['Import tips'], ['Leave Entry Ref empty on new rows – the app numbers them.'], ['Rows with a used Entry Ref, an unknown child/task, bad dates/times or overlapping times are blocked.'], ['Result, Minutes, Overrun and Card are worked out again by the app.'], ['The History sheet is for reading only – it is not imported.']]), 'Info');
       const name = 'family-planner_' + data.from + '_' + data.to + '.xlsx';
       XL.writeFile(wb, name);
       toast(S.v.demo ? t('previewNoDownload') : '⬇️ ' + name);
@@ -2368,7 +2564,7 @@ function showImportCheck(box, data, r) {
   });
   add(box, go);
 }
-const MSG_ICON = { Overwrite: '✂️', Import: '⬆️', Reward: '🎁', Target: '🎯', 'Auto-finish': '⏰', Cards: '🟥', Tickets: '🎟', Delete: '🗑️', Edit: '✏️', Plan: '🗓️', Undo: '↩️', Settings: '⚙️' };
+const MSG_ICON = { Profile: '🖼️', Overwrite: '✂️', Import: '⬆️', Reward: '🎁', Target: '🎯', 'Auto-finish': '⏰', Cards: '🟥', Tickets: '🎟', Delete: '🗑️', Edit: '✏️', Plan: '🗓️', Undo: '↩️', Settings: '⚙️' };
 function historyView() {
   const wrap = el('div'), list = S.v.messages || [];
   if (list.length) store.set('fp2-seen', msgKey(list[0]));
@@ -2383,6 +2579,7 @@ function historyView() {
     el('div', { style: 'flex:1' }, el('div', { text: m.text }), el('div', { class: 'small muted', text: m.time + ' · ' + m.type + ' · ' + m.by + (m.refs ? ' · Ref ' + m.refs : '') + (m.state ? ' · ' + m.state : '') })),
     m.canUndo ? el('button', { class: 'btn sm', onclick: () => twoTap('u' + m.id, () => act('undo', { id: m.id }).then(() => { render(); toast(t('undone')); }).catch((e) => toast(errMsg(e)))) }, t('undo')) : null)));
   add(wrap, card);
+  add(wrap, el('div', { class: 'row', style: 'justify-content:center;margin-top:10px' }, el('button', { class: 'btn sm', onclick: (ev) => exportHistory(ev.currentTarget) }, '📊 ' + t('exportHist'))));
   add(wrap, el('p', { class: 'muted small center', text: 'Google Sheet › Messages' }));
   return wrap;
 }
@@ -2442,7 +2639,7 @@ function trendsCard(k) {
     if (!S.trendsLoading) { S.trendsLoading = true; call('trends', { weeks: 8 }).then((x) => { S.trends = x; S.trendsAt = Date.now(); if (S.tab === 'report' && !sheetOpen()) render(); }).catch(() => { S.trendsAt = Date.now(); }).finally(() => { S.trendsLoading = false; }); }
     return card;
   }
-  const kids = k ? [k] : S.v.settings.kids, wk = S.trends;
+  const kids = k ? [k] : kidsOnly(), wk = S.trends;
   const measures = [['A', nat('Academic') + ' · ' + t('hoursOf'), T.NATURE_COLOR.Academic, (v) => v / 60, (v) => T.hm(v)], ['D', nat('Development') + ' · ' + t('hoursOf'), T.NATURE_COLOR.Development, (v) => v / 60, (v) => T.hm(v)], ['T', nat('Toxic') + ' · ' + t('hoursOf'), T.NATURE_COLOR.Toxic, (v) => v / 60, (v) => T.hm(v)], ['pct', t('onPlan') + ' %', '#0f766e', (v) => v, (v) => (v == null ? '–' : v + '%')]];
   kids.forEach((kk) => {
     add(card, el('div', { class: 'b', style: 'margin:10px 0 4px', text: kk.emoji + ' ' + kk.name }));
@@ -2488,7 +2685,7 @@ function reportCard(rk, rep) {
   const k = rk.kid, s = rk.stats, card = el('div', { class: 'card' }), d = db();
   add(card, el('div', { class: 'row', style: 'gap:14px' },
     el('div', { class: 'ring', style: `background:conic-gradient(${k.color} ${s.pct}%, var(--soft) 0)` }, el('span', { text: s.pct + '%' })),
-    el('div', null, el('div', { style: 'font-size:20px;font-weight:800', text: k.emoji + ' ' + k.name }), el('div', { class: 'muted', text: t('onPlan') + (rep.inProgress ? ' · ' + (T.I18N[LANG] || T.I18N.en).inProgress : '') }))));
+    el('div', null, el('div', { style: 'font-size:20px;font-weight:800;display:flex;align-items:center;gap:8px' }, avEl(k, 30), k.name), el('div', { class: 'muted', text: t('onPlan') + (rep.inProgress ? ' · ' + (T.I18N[LANG] || T.I18N.en).inProgress : '') }))));
   add(card, el('div', { class: 'strip', style: 'margin:10px 0' },
     ...[['✅', t('onTime'), s.onTime], ['⏰', t('late'), s.late + (s.lateMin ? ' (' + s.lateMin + 'm)' : '')], ['⏱', t('overran'), s.overran + (s.overMin ? ' (' + s.overMin + 'm)' : '')], ['↺', t('changed'), s.changed], ['✕', t('cancelled'), s.cancelled], ['⚠️', t('missed'), s.missed], ['➕', t('unplanned'), rk.unplanned.length]]
       .map(([i, l, v]) => el('span', { class: 'pill', style: 'font-size:13px;padding:5px 10px', text: i + ' ' + l + ' ' + v }))));
@@ -2536,10 +2733,10 @@ function revokeSheet(c) {
 /* ================= TARGETS ================= */
 function countdown(x) { if (x.done) return '✅ ' + t('achieved'); if (x.daysLeft == null) return ''; if (x.daysLeft === 0) return t('dueToday'); if (x.daysLeft < 0) return t('overdue') + ' ' + (-x.daysLeft); return x.daysLeft + ' ' + t('daysLeft'); }
 function viewTargets() {
-  const wrap = el('div'), k = curKid(), kids = k ? [k] : S.v.settings.kids;
+  const wrap = el('div'), k = curKid(), kids = k ? [k] : kidsOnly();
   add(wrap, el('div', { style: 'margin-bottom:10px' }, el('button', { class: 'btn pri', style: 'background:' + (k ? k.color : '#0f766e'), onclick: () => targetSheet({ kid: kids[0].name, term: 'Short', kind: 'Count', due: T.addDays(now().date, 14), goal: 10, progress: 0 }) }, t('addTarget'))));
   kids.forEach((kk) => {
-    add(wrap, el('h2', { text: kk.emoji + ' ' + kk.name }));
+    add(wrap, el('h2', { style: 'display:flex;align-items:center;gap:8px' }, avEl(kk, 30), kk.name));
     const list = S.v.targets.filter((x) => x.kid === kk.name).sort((a, b) => (a.term === b.term ? (a.due < b.due ? -1 : 1) : a.term === 'Short' ? -1 : 1));
     if (!list.length) add(wrap, el('div', { class: 'card muted', text: '—' }));
     list.forEach((x) => {
@@ -2585,7 +2782,7 @@ function targetSheet(x) {
 /* ================= REWARDS ================= */
 function viewRewards() {
   const wrap = el('div'), d = db(), k = curKid(), list = (S.v.settings.rewards || []);
-  const kids = k ? [k] : S.v.settings.kids;
+  const kids = k ? [k] : kidsOnly();
   add(wrap, el('div', { class: 'strip', style: 'margin-bottom:12px' }, kids.map((kk) => el('span', { class: 'stat', style: `font-size:18px;box-shadow:inset 0 0 0 2px ${tint(kk.color, .4)}`, text: kk.emoji + ' ' + kk.name + ' · 🎟 ' + T.balance(d, kk.name) }))));
   const grid = el('div', { style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px' });
   list.filter((r) => r.active !== 'No').forEach((r) => {
@@ -2650,9 +2847,17 @@ function viewSetup() {
   const inp = (obj, key, attrs) => { const i = el('input', Object.assign({ type: 'text', value: obj[key] == null ? '' : String(obj[key]) }, attrs || {})); i.addEventListener('input', () => { obj[key] = attrs && attrs.type === 'number' ? +i.value : i.value; }); return i; };
   // family
   const fam = el('div', { class: 'card' }, el('h3', { text: '👨‍👩‍👧‍👦 ' + t('family') }), el('label', { class: 'f', text: t('familyName') }), inp(s, 'familyName', { maxlength: '40' }), el('label', { class: 'f', text: t('kids') }));
-  s.kids.forEach((k) => add(fam, el('div', { class: 'row', style: 'margin-bottom:6px' }, inp(k, 'emoji', { style: 'width:60px;text-align:center', maxlength: '8' }), inp(k, 'name', { maxlength: '30' }), el('input', { type: 'color', value: k.color, style: 'width:52px;height:44px;border:0;background:none', oninput: (e) => { k.color = e.target.value; } }))));
+  s.kids.filter((k) => !k.adult).forEach((k) => add(fam, el('div', { class: 'row', style: 'margin-bottom:6px' }, inp(k, 'emoji', { style: 'width:60px;text-align:center', maxlength: '8' }), inp(k, 'name', { maxlength: '30' }), el('input', { type: 'color', value: k.color, style: 'width:52px;height:44px;border:0;background:none', oninput: (e) => { k.color = e.target.value; } }))));
   add(fam, el('label', { class: 'f', text: t('parents') }));
-  s.parents.forEach((k) => add(fam, el('div', { class: 'row', style: 'margin-bottom:6px' }, inp(k, 'emoji', { style: 'width:60px;text-align:center', maxlength: '8' }), inp(k, 'name', { maxlength: '30' }))));
+  s.parents.forEach((k) => {
+    const mine = () => s.kids.find((m) => m.adult && (m.name === (k.oldName || k.name) || m.name === k.name));
+    const m = mine();
+    const tb = el('button', { class: 'btn sm' + (m ? ' pri' : ''), style: 'flex:none;white-space:nowrap' + (m ? ';background:#0f766e' : ''), onclick: () => {
+      if (m) twoTap('tt' + k.name, () => { s.kids.splice(s.kids.indexOf(m), 1); redraw(); }, t('ownTTwarn'));
+      else { s.kids.push({ name: k.name, emoji: k.emoji || '🙂', color: '#0f766e', adult: true }); redraw(); }
+    } }, '📅 ' + (m ? t('ownTTon') : t('ownTT')));
+    add(fam, el('div', { class: 'row', style: 'margin-bottom:6px' }, inp(k, 'emoji', { style: 'width:60px;text-align:center', maxlength: '8' }), inp(k, 'name', { maxlength: '30' }), tb));
+  });
   const pin = el('input', { type: 'password', inputmode: 'numeric', pattern: '[0-9]*', placeholder: '4–8', value: D.pin }); pin.addEventListener('input', () => { D.pin = pin.value.trim(); });
   add(fam, [el('label', { class: 'f', text: t('myPin') + ' (' + S.parent + ')' }), pin]);
   const codeBox = el('div', { class: 'row wrap', style: 'margin-top:10px' });
@@ -2683,6 +2888,7 @@ function viewSetup() {
   add(wrap, cal);
   add(wrap, el('div', { class: 'savebar' }, el('button', { class: 'btn', onclick: () => { S.draft = null; render(); } }, t('cancel')), el('button', { class: 'btn pri', style: 'background:#0f766e', onclick: () => {
     if (D.pin && !/^\d{4,8}$/.test(D.pin)) { toast('PIN: 4–8'); return; }
+    s.parents.forEach((pp) => { if (pp.oldName && pp.oldName !== pp.name) { const m = s.kids.find((x) => x.adult && x.name === pp.oldName); if (m) { if (m.oldName == null) m.oldName = pp.oldName; m.name = pp.name; } } });
     act('saveSettings', { settings: s, newPin: D.pin }).then(() => { if (D.pin) S.pin = D.pin; const me = s.parents.find((p) => p.oldName === S.parent); if (me) S.parent = me.name; const kk = s.kids.find((k) => k.oldName === S.who); if (kk) S.who = kk.name; S.draft = null; S.cal = null; render(); toast(t('saved')); }).catch((e) => toast(errMsg(e)));
   } }, t('saveSettings'))));
   // tasks
@@ -2729,9 +2935,13 @@ function emojiSheet(x, cb) {
 }
 
 /* ================= go ================= */
+let tickN = 0;
 setInterval(() => {
-  document.querySelectorAll('[data-run]').forEach((n) => { const w = S.v && S.v.done.find((x) => x.ref === n.getAttribute('data-run')); if (w) updateClock(n, w, n.closest('.now')); });
-}, 10000);
+  if (!S.v) return;
+  document.querySelectorAll('[data-run]').forEach((n) => { const w = S.v.done.find((x) => x.ref === n.getAttribute('data-run') && x.status === 'Running'); if (w) updateClock(n, w, n.closest('.now')); });
+  checkAlarms();
+  if (++tickN % 5 === 0) wakeSync();
+}, 1000);
 setInterval(() => { if (document.visibilityState === 'visible') refresh(false); }, 30000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refresh(false); });
 let lastW = window.innerWidth;
