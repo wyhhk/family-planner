@@ -7,6 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Planner">
 <meta name="theme-color" content="#0f766e">
+<script>window.FP_SITE = true;</script>
 <script src="config.js"></script>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-180.png">
@@ -1695,7 +1696,23 @@ function call(action, payload, extra) {
   });
 }
 function setView(v) { S.v = v; S.loadedAt = Date.now(); }
+// the GitHub site without an Apps Script link in config.js must never fall back to sample data
+const UNSET = !!window.FP_SITE && MODE === 'demo';
+function renderUnset() {
+  $('#people').innerHTML = ''; $('#tabs').hidden = true;
+  $('#syncText').textContent = 'Not connected · 未連線'; $('#syncBtn').className = 'sync err';
+  const v = $('#view'); v.innerHTML = '';
+  add(v, el('div', { class: 'card', style: 'padding:22px 18px;max-width:560px;margin:20px auto' },
+    el('div', { class: 'big center', text: '🔌' }),
+    el('h3', { class: 'center', text: 'Not connected to your Google Sheet · 未連接到你的 Google Sheet' }),
+    el('ol', { style: 'line-height:1.7;padding-left:20px' },
+      el('li', { text: 'GitHub › family-planner › config.js › ✏️' }),
+      el('li', { text: 'Paste your Apps Script link (ends in /exec) between the quotes · 把 Apps Script 網址（結尾是 /exec）貼在引號中間' }),
+      el('li', { text: 'Commit changes, wait 1–2 minutes, then reload this page · 按 Commit changes，等 1–2 分鐘再重新載入' })),
+    el('p', { class: 'small muted', text: 'window.PLANNER_API = "https://script.google.com/macros/s/……/exec";' })));
+}
 function refresh(manual) {
+  if (UNSET) { renderUnset(); return Promise.resolve(); }
   if (!S.code) { renderPair(); return Promise.resolve(); }
   if (S.busy) return Promise.resolve();
   if (!manual && (sheetOpen() || S.tab === 'setup' || S.tplDraft || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || ''))) return Promise.resolve();
@@ -1864,7 +1881,7 @@ function pinSheet(after) {
     el('div', { class: 'sbtns' }, el('button', { class: 'btn', onclick: closeSheet }, t('cancel')), el('button', { class: 'btn pri', style: 'background:#0f766e', onclick: go }, t('unlock')))));
   setTimeout(() => inp.focus(), 60);
 }
-const APP_BUILD = '2026-11-26 00:39';
+const APP_BUILD = '2026-11-26 08:18';
 function deviceSheet() {
   const th = store.get('fp2-theme', 'auto');
   const box = el('div');
