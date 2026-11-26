@@ -227,7 +227,7 @@ var FP = (function () {
   var COLS = {
     tasks: [['name', 'Task'], ['nature', 'Nature'], ['emoji', 'Emoji'], ['link', 'Link'], ['active', 'Active']],
     plan: [['ref', 'Entry Ref'], ['type', 'Planning/Workdone'], ['kid', 'Kids'], ['date', 'Date'], ['from', 'Time_Fr'], ['to', 'Time_To'], ['task', 'Task'], ['by', 'Created by'], ['note', 'Note'], ['made', 'Created at']],
-    done: [['ref', 'Entry Ref'], ['type', 'Planning/Workdone'], ['kid', 'Kids'], ['date', 'Date'], ['from', 'Time_Fr'], ['to', 'Time_To'], ['task', 'Task'], ['by', 'Created by'], ['planRef', 'Plan Ref'], ['status', 'Status'], ['result', 'Result'], ['min', 'Minutes'], ['tickets', 'Tickets used'], ['overrun', 'Overrun (min)'], ['card', 'Card'], ['note', 'Note'], ['made', 'Created at']],
+    done: [['ref', 'Entry Ref'], ['type', 'Planning/Workdone'], ['kid', 'Kids'], ['date', 'Date'], ['from', 'Time_Fr'], ['to', 'Time_To'], ['task', 'Task'], ['by', 'Created by'], ['planRef', 'Plan Ref'], ['status', 'Status'], ['result', 'Result'], ['min', 'Minutes'], ['tickets', 'Tickets used'], ['overrun', 'Overrun (min)'], ['card', 'Card'], ['note', 'Note'], ['made', 'Created at'], ['due', 'Planned end']],
     template: [['kid', 'Kids'], ['day', 'Day'], ['from', 'Time_Fr'], ['to', 'Time_To'], ['task', 'Task']],
     tickets: [['ref', 'Entry Ref'], ['kid', 'Kids'], ['date', 'Date'], ['time', 'Time'], ['change', 'Change'], ['kind', 'Kind'], ['reason', 'Reason'], ['relRef', 'Related Ref'], ['by', 'Created by']],
     cards: [['ref', 'Entry Ref'], ['kid', 'Kids'], ['date', 'Date'], ['color', 'Card'], ['count', 'Count'], ['overrun', 'Overrun (min)'], ['relRef', 'Related Ref'], ['status', 'Status'], ['applied', 'Applied on'], ['reason', 'Reason'], ['by', 'Created by']],
@@ -237,7 +237,7 @@ var FP = (function () {
   var SHEET_NAMES = { tasks: 'Tasks', plan: 'Planning', done: 'Workdone', template: 'Template', tickets: 'Tickets', cards: 'Cards', targets: 'Targets', messages: 'Messages' };
   var NUM_KEYS = { min: 1, tickets: 1, overrun: 1, change: 1, count: 1, goal: 1, progress: 1 };
   var DATE_KEYS = { date: 1, due: 1, since: 1, applied: 1 };
-  var TIME_KEYS = { from: 1, to: 1, time: 1 };
+  var TIME_KEYS = { from: 1, to: 1, time: 1, due: 1 };
 
   /* ---------- dates & times ---------- */
   function pad(n, w) { n = String(n); while (n.length < (w || 2)) n = '0' + n; return n; }
@@ -501,6 +501,7 @@ var FP = (function () {
   function dueEnd(db, w) {
     var s = abs(w.date, w.from);
     if (natureOf(db, w.task) === 'Toxic' && !isAdult(db, w.kid)) return s + (+w.tickets || 0) * TICKET_MIN;
+    if (w.due && /^\d\d:\d\d$/.test(w.due)) return Math.max(s, abs(w.date, w.due)); // finish time chosen when starting
     var p = w.planRef ? byRef(db.plan, w.planRef) : null;
     if (p) return Math.max(s, abs(p.date, p.from) + span(p.from, p.to));
     return s + 60;
@@ -575,15 +576,22 @@ var FP = (function () {
         finishRow(db, run, Math.max(abs(run.date, run.from), abs(date, at)), ctx, '', now);
       }
       if (plan && plan.task !== p.task && natureOf(db, plan.task) === 'Living') plan = null; // doing something else during School/Free etc. is simply unplanned
-      var nature = natureOf(db, p.task), n = 0;
+      var nature = natureOf(db, p.task), n = 0, due = '';
+      if (p.due) {
+        needTime(p.due);
+        var dm = toMin(p.due) - toMin(at);
+        if (dm <= 0) throw err('The finish time must be after the start time');
+        due = p.due;
+      }
       var ref = nextRef(db);
       if (nature === 'Toxic' && !isAdult(db, p.kid)) {
-        n = Math.max(1, Math.round(+p.tickets || 1));
+        n = due ? Math.ceil((toMin(due) - toMin(at)) / TICKET_MIN) : Math.max(1, Math.round(+p.tickets || 1));
+        if (due) due = fromMin(Math.min(1439, toMin(at) + n * TICKET_MIN));
         if (balance(db, p.kid) < n) throw err('NO_TICKETS');
         ins(db, 'tickets', { ref: nextRef(db), kid: p.kid, date: now.date, time: now.time, change: -n, kind: 'Used', reason: p.task + ' (' + n * TICKET_MIN + ' min)', relRef: ref, by: ctx.name });
       }
-      var w = ins(db, 'done', { ref: ref, type: 'Workdone', kid: p.kid, date: date, from: at, to: '', task: p.task, by: ctx.name, planRef: plan ? plan.ref : '', status: 'Running', result: 'Running', min: 0, tickets: n, overrun: 0, card: '', note: String(p.note || '').slice(0, 300), made: stamp(now) });
-      return { ref: w.ref };
+      var w = ins(db, 'done', { ref: ref, type: 'Workdone', kid: p.kid, date: date, from: at, to: '', task: p.task, by: ctx.name, planRef: plan ? plan.ref : '', status: 'Running', result: 'Running', min: 0, tickets: n, overrun: 0, card: '', note: String(p.note || '').slice(0, 300), made: stamp(now), due: due });
+      return { ref: w.ref, due: due };
     },
     finish: function (db, p, ctx, now) {
       var w = byRef(db.done, p.ref);
@@ -601,8 +609,20 @@ var FP = (function () {
       var n = Math.max(1, Math.round(+p.tickets || 1));
       if (balance(db, w.kid) < n) throw err('NO_TICKETS');
       ins(db, 'tickets', { ref: nextRef(db), kid: w.kid, date: now.date, time: now.time, change: -n, kind: 'Used', reason: 'Extra time for ' + w.task, relRef: w.ref, by: ctx.name });
-      w.tickets = (+w.tickets || 0) + n; upd(db, 'done', w);
+      w.tickets = (+w.tickets || 0) + n;
+      if (w.due) w.due = fromMin(Math.min(1439, toMin(w.due) + n * TICKET_MIN));
+      upd(db, 'done', w);
       return { tickets: w.tickets };
+    },
+    // change (or clear) the finish time of a running session – drives the timer and the alarm
+    setDue: function (db, p, ctx, now) {
+      var w = byRef(db.done, p.ref);
+      if (!w || w.status !== 'Running') throw err('This session is not running');
+      if (natureOf(db, w.task) === 'Toxic' && !isAdult(db, w.kid)) throw err('For more time on a Toxic task, use +1 🎟');
+      var due = String(p.due || '');
+      if (due) { needTime(due); if (toMin(due) <= toMin(w.from)) throw err('The finish time must be after the start time'); }
+      w.due = due; upd(db, 'done', w);
+      return { ref: w.ref, due: due };
     },
     change: function (db, p, ctx, now) {
       var w = byRef(db.done, p.ref);
@@ -1176,7 +1196,7 @@ var FP = (function () {
       return (!from || d >= from) && (!to || d <= to);
     }).slice().reverse().map(function (m) { return { time: m.time, type: m.type, text: m.text, refs: m.refs || '', by: m.by, state: m.state || '' }; });
   }
-  var KID_ACTIONS = { start: 1, finish: 1, extend: 1, change: 1, cancel: 1, addDone: 1, editDone: 1, delDone: 1, targetInc: 1, redeem: 1, addTarget: 1, avatar: 1 };
+  var KID_ACTIONS = { start: 1, finish: 1, extend: 1, change: 1, cancel: 1, addDone: 1, editDone: 1, delDone: 1, targetInc: 1, redeem: 1, addTarget: 1, avatar: 1, setDue: 1 };
 
   function exec(db, action, payload, ctx, now) {
     if (!ACTIONS[action]) throw err('Unknown action');
@@ -1452,7 +1472,7 @@ const W = {
     emailNow: '📧 Email report now', emailWarn: 'Sending also deducts pending red cards.', copyText: '📋 Copy as text', copied: 'Copied ✓', sent: 'Report emailed ✓',
     notes: 'What they found and did', noteDone: 'What you found and did', notePh: 'e.g. learned 8 new words; the hard part was…', missedList: 'Missed',
     rewards: 'Rewards', redeem: 'Redeem', needMore: 'more needed', redeemed: 'Redeemed – a parent will give it to you', recentRewards: 'Recent rewards', manageRewards: 'Rewards list', addReward: '＋ Add reward', saveRewards: 'Save rewards', cost: 'Cost',
-    undo: '↩️ Undo', undone: 'Undone ✓', copyWeek: 'Copy previous week here', autoFill: 'Next week is filled from the template automatically when the weekly report is sent', version: 'Version', eachDay: 'Each day', eachTask: 'Each task · whole week', byTaskT: 'Each day and task', mBoth: 'Done / plan', weekCol: 'Week', totalT: 'Total', lessPlan: 'less than planned', toxicOver: 'Toxic over plan', nothingWord: 'nothing', nothingYet: 'Nothing planned or done yet.', exportHist: 'Export history to Excel', myPic: 'My picture', pickIcon: 'Choose an icon', uploadPhoto: 'Upload a photo', takePhoto: 'Take or choose a photo', removePhoto: 'Remove photo', photoBad: 'That photo could not be read – try another one', picSaved: 'Picture changed ✓', tapToGrant: 'Tap 🎟 to grant or deduct', usesTickets: 'Uses', moreLater: 'Need more time? Tap +1 🎟 while playing.', hide: 'Hide', show: 'Show', trends: 'Trends – last 8 weeks', trendsTable: 'Show as a table', hoursOf: 'hours', weekOf: 'Week of', skip: 'Skip', reflect: 'Well done! What did you find and do?', slots: 'Toxic slots', topTasks: 'Most time on',
+    undo: '↩️ Undo', undone: 'Undone ✓', copyWeek: 'Copy previous week here', autoFill: 'Next week is filled from the template automatically when the weekly report is sent', version: 'Version', endT: 'Finish', endPlan: 'Plan end', endNext: 'Until next', endNone: 'No finish time', endClock: 'Pick a time…', endOther: 'Other…', endAt: 'Finish at', endTotal: 'total', endPast: 'This time has already passed', endBefore: 'The finish time must be after the start', endNoTix: 'Not enough tickets for that', endSet: 'Ends', endAdd: 'Set an end time', endSaved: 'End time saved', minsW: 'minutes', eachDay: 'Each day', eachTask: 'Each task · whole week', byTaskT: 'Each day and task', mBoth: 'Done / plan', weekCol: 'Week', totalT: 'Total', lessPlan: 'less than planned', toxicOver: 'Toxic over plan', nothingWord: 'nothing', nothingYet: 'Nothing planned or done yet.', exportHist: 'Export history to Excel', myPic: 'My picture', pickIcon: 'Choose an icon', uploadPhoto: 'Upload a photo', takePhoto: 'Take or choose a photo', removePhoto: 'Remove photo', photoBad: 'That photo could not be read – try another one', picSaved: 'Picture changed ✓', tapToGrant: 'Tap 🎟 to grant or deduct', usesTickets: 'Uses', moreLater: 'Need more time? Tap +1 🎟 while playing.', hide: 'Hide', show: 'Show', trends: 'Trends – last 8 weeks', trendsTable: 'Show as a table', hoursOf: 'hours', weekOf: 'Week of', skip: 'Skip', reflect: 'Well done! What did you find and do?', slots: 'Toxic slots', topTasks: 'Most time on',
     addTarget: '＋ Add target', short: 'Short term', long: 'Long term', due: 'Due', daysLeft: 'days left', dueToday: 'Due today', overdue: 'Overdue', achieved: 'Achieved',
     kind: 'Type', count: 'Count (e.g. 10 spelling words)', hoursKind: 'Hours on a task', milestone: 'Milestone (done / not yet)', goal: 'Goal', progress: 'Progress', since: 'Count hours from', title: 'Target',
     events: 'Coming events · next 2 weeks', noEvents: 'No events in the next 2 weeks.', allDay: 'All day', refresh: 'Refresh', chooseCals: 'Choose calendars in Setup.',
@@ -1497,7 +1517,7 @@ const W = {
     emailNow: '📧 立即寄出報告', emailWarn: '寄出時也會扣除待扣的紅牌。', copyText: '📋 複製文字', copied: '已複製 ✓', sent: '報告已寄出 ✓',
     notes: '發現和做了什麼', noteDone: '你發現了什麼、做了什麼', notePh: '例如：學了 8 個新字；最難的是…', missedList: '錯過',
     rewards: '獎勵', redeem: '兌換', needMore: '張不夠', redeemed: '已兌換 – 家長會給你', recentRewards: '最近兌換', manageRewards: '獎勵清單', addReward: '＋ 新增獎勵', saveRewards: '儲存獎勵', cost: '票數',
-    undo: '↩️ 還原', undone: '已還原 ✓', copyWeek: '複製上一週到這週', autoFill: '每週報告寄出時，會自動用範本填好下一週', version: '版本', eachDay: '每一天', eachTask: '每項任務 · 全週', byTaskT: '每天 × 每項任務', mBoth: '完成 / 計劃', weekCol: '全週', totalT: '合計', lessPlan: '比計劃少', toxicOver: '有毒類超出計劃', nothingWord: '沒有', nothingYet: '還沒有計劃或紀錄。', exportHist: '匯出歷史紀錄到 Excel', myPic: '我的頭像', pickIcon: '選一個圖示', uploadPhoto: '上傳相片', takePhoto: '拍照或選相片', removePhoto: '移除相片', photoBad: '這張相片讀不到，請換一張', picSaved: '頭像已更新 ✓', tapToGrant: '按 🎟 可發票或扣票', usesTickets: '使用', moreLater: '想玩久一點？進行中按 +1 🎟。', hide: '隱藏', show: '顯示', trends: '趨勢 – 最近 8 週', trendsTable: '以表格顯示', hoursOf: '小時', weekOf: '週', skip: '略過', reflect: '做得好！你發現了什麼、做了什麼？', slots: '有毒時段', topTasks: '最多時間',
+    undo: '↩️ 還原', undone: '已還原 ✓', copyWeek: '複製上一週到這週', autoFill: '每週報告寄出時，會自動用範本填好下一週', version: '版本', endT: '完成時間', endPlan: '按計劃', endNext: '到下一項', endNone: '不設定', endClock: '指定時間…', endOther: '其他…', endAt: '完成於', endTotal: '共', endPast: '這個時間已經過了', endBefore: '完成時間要在開始時間之後', endNoTix: '票不夠', endSet: '結束於', endAdd: '設定結束時間', endSaved: '已儲存結束時間', minsW: '分鐘', eachDay: '每一天', eachTask: '每項任務 · 全週', byTaskT: '每天 × 每項任務', mBoth: '完成 / 計劃', weekCol: '全週', totalT: '合計', lessPlan: '比計劃少', toxicOver: '有毒類超出計劃', nothingWord: '沒有', nothingYet: '還沒有計劃或紀錄。', exportHist: '匯出歷史紀錄到 Excel', myPic: '我的頭像', pickIcon: '選一個圖示', uploadPhoto: '上傳相片', takePhoto: '拍照或選相片', removePhoto: '移除相片', photoBad: '這張相片讀不到，請換一張', picSaved: '頭像已更新 ✓', tapToGrant: '按 🎟 可發票或扣票', usesTickets: '使用', moreLater: '想玩久一點？進行中按 +1 🎟。', hide: '隱藏', show: '顯示', trends: '趨勢 – 最近 8 週', trendsTable: '以表格顯示', hoursOf: '小時', weekOf: '週', skip: '略過', reflect: '做得好！你發現了什麼、做了什麼？', slots: '有毒時段', topTasks: '最多時間',
     addTarget: '＋ 新增目標', short: '短期', long: '長期', due: '到期', daysLeft: '天', dueToday: '今天到期', overdue: '已過期', achieved: '已達成',
     kind: '類型', count: '數量（例如 10 個生字）', hoursKind: '任務時數', milestone: '里程碑（達成 / 未達成）', goal: '目標值', progress: '進度', since: '時數由此日起計', title: '目標',
     events: '未來兩週的活動', noEvents: '未來兩週沒有活動。', allDay: '全日', refresh: '重新整理', chooseCals: '在「設定」選擇日曆。',
@@ -1881,7 +1901,7 @@ function pinSheet(after) {
     el('div', { class: 'sbtns' }, el('button', { class: 'btn', onclick: closeSheet }, t('cancel')), el('button', { class: 'btn pri', style: 'background:#0f766e', onclick: go }, t('unlock')))));
   setTimeout(() => inp.focus(), 60);
 }
-const APP_BUILD = '2026-11-26 08:18';
+const APP_BUILD = '2026-11-26 17:25';
 function deviceSheet() {
   const th = store.get('fp2-theme', 'auto');
   const box = el('div');
@@ -2050,12 +2070,7 @@ function nowCard(k) {
       el('div', { class: 's', text: t('started') + ' ' + run.from + (due != null ? ' · ' + t('endsAt') + ' ' + T.fromMin(((due % 1440) + 1440) % 1440) : '') + (poison ? ' · ' + run.tickets + ' 🎟 = ' + run.tickets * 15 + ' min' : '') }), el2,
       el('div', { class: 's small tup', 'data-tup': run.ref, hidden: true, text: t('timesUpHint') })]);
     if (poison) add(box, el('div', { class: 's small', text: t('overWarn') }));
-    if (due == null || S.timers[run.ref]) {
-      const ab = el('div', { class: 'alarmset' }, el('span', { class: 's small', text: S.timers[run.ref] ? '⏰ ' + T.fromMin(((S.timers[run.ref] % 1440) + 1440) % 1440) : t('noEnd') }));
-      [10, 15, 20, 30, 45, 60].forEach((m) => add(ab, el('button', { class: 'btn sm', onclick: () => { S.timers[run.ref] = Math.floor(nowSec() / 60) + m; store.set('fp2-timers', S.timers); audioCtx(); render(); } }, m + "'")));
-      if (S.timers[run.ref]) add(ab, el('button', { class: 'btn sm', onclick: () => { delete S.timers[run.ref]; store.set('fp2-timers', S.timers); render(); } }, '✕'));
-      add(box, ab);
-    }
+    if (!poison) add(box, el('div', { class: 'alarmset' }, el('button', { class: 'btn sm', onclick: () => endSheet(run) }, '⏰ ' + (due != null ? t('endSet') + ' ' + T.fromMin(((due % 1440) + 1440) % 1440) : t('endAdd')))));
     updateClock(el2, run, box);
     add(box, el('div', { class: 'btns' },
       el('button', { class: 'btn w', onclick: () => doFinish(run) }, t('finish')),
@@ -2105,7 +2120,7 @@ function nowSec() { // device clock (for the seconds), unless it disagrees with 
 }
 function timerDue(w) { // when this session should finish (absolute minutes), or null when nothing was set
   const d = db(), k = kidObj(w.kid);
-  if (S.timers[w.ref]) return S.timers[w.ref];
+  if (w.due) return T.dueEnd(d, w);
   if (T.natureOf(d, w.task) === 'Toxic' && !(k && k.adult)) return T.dueEnd(d, w);
   if (w.planRef && d.plan.some((p) => p.ref === w.planRef)) return T.dueEnd(d, w);
   return null;
@@ -2228,6 +2243,75 @@ function warnBox() {
 }
 function savedToast(d) { const c = d && d.result && d.result.changed; toast(c ? '✂️ ' + c + ' ' + (LANG === 'en' && c === 1 ? 'older entry changed – see History' : t('olderChanged')) : t('saved')); }
 function timeField(val) { return el('input', { type: 'time', value: val, step: '60' }); }
+/* finish-time picker: by plan / next task (selection), by length, or by a clock time */
+function endPicker(o) {
+  // o: { start: () => 'HH:MM', plan, next: {from, task}, toxic, bal, current }
+  const wrap = el('div'), sum = el('div', { class: 'small', style: 'margin-top:6px' }), err = el('div', { class: 'err', hidden: true });
+  const other = el('input', { type: 'number', min: '1', max: '600', step: '5', inputmode: 'numeric', placeholder: t('minsW'), style: 'width:110px', hidden: true });
+  const clock = timeField(o.current || (o.plan ? o.plan.to : ''));
+  clock.hidden = true;
+  const st = () => T.toMin(o.start());
+  const planOk = () => o.plan && T.toMin(o.plan.to) > st();
+  const nextOk = () => o.next && T.toMin(o.next.from) > st() && !(o.plan && o.plan.to === o.next.from);
+  const durs = o.toxic ? [1, 2, 3, 4, 5, 6, 8].filter((n) => n <= Math.max(1, o.bal)).map((n) => n * 15) : [10, 15, 20, 30, 45, 60, 90, 120];
+  let mode, dur = 0;
+  if (o.current) { mode = 'clock'; clock.value = o.current; clock.hidden = false; }
+  else if (o.toxic) { mode = 'dur'; dur = o.plan ? Math.max(15, Math.min(o.bal, Math.max(1, Math.floor(T.span(o.plan.from, o.plan.to) / 15))) * 15) : 15; }
+  else if (planOk()) mode = 'plan';
+  else mode = 'none';
+  const value = () => {
+    const s0 = st();
+    if (mode === 'plan') return planOk() ? o.plan.to : '';
+    if (mode === 'next') return nextOk() ? o.next.from : '';
+    if (mode === 'dur' || mode === 'other') { const m = mode === 'other' ? Math.round(+other.value || 0) : dur; return m > 0 ? T.fromMin(Math.min(1439, s0 + m)) : ''; }
+    if (mode === 'clock') return clock.value || '';
+    return '';
+  };
+  const check = () => { // returns an error text or ''
+    const v = value();
+    if (!v) return mode === 'none' || !o.toxic ? '' : t('endBefore');
+    if (T.toMin(v) <= st()) return t('endBefore');
+    if (o.toxic && Math.ceil((T.toMin(v) - st()) / 15) > o.bal) return t('endNoTix');
+    return '';
+  };
+  const draw = () => {
+    wrap.innerHTML = '';
+    const s0 = st(), chip = (m, label, on, fn) => el('button', { class: 'opt' + (on ? ' on' : ''), onclick: () => { mode = m; fn && fn(); other.hidden = mode !== 'other'; clock.hidden = mode !== 'clock'; draw(); if (mode === 'other') other.focus(); } }, label);
+    const sel = el('div', { class: 'opts' });
+    if (planOk()) add(sel, chip('plan', '📋 ' + t('endPlan') + ' ' + o.plan.to, mode === 'plan'));
+    if (nextOk()) add(sel, chip('next', '⏭ ' + t('endNext') + ' ' + o.next.from + ' · ' + o.next.task, mode === 'next'));
+    if (!o.toxic) add(sel, chip('none', t('endNone'), mode === 'none'));
+    const ds = el('div', { class: 'opts', style: 'margin-top:6px' });
+    durs.forEach((m) => add(ds, chip('dur', (m >= 60 && m % 60 === 0 ? m / 60 + 'h' : m >= 60 ? Math.floor(m / 60) + 'h' + (m % 60) : m + "'") + (o.toxic ? ' · ' + m / 15 + '🎟' : ''), mode === 'dur' && dur === m, () => { dur = m; })));
+    if (!o.toxic) add(ds, chip('other', t('endOther'), mode === 'other'));
+    add(ds, chip('clock', '🕒 ' + t('endClock'), mode === 'clock'));
+    add(wrap, [el('label', { class: 'f', text: t('endT') }), sel, ds, el('div', { class: 'row', style: 'gap:8px;margin-top:6px' }, other, clock), sum, err]);
+    const v = value(), e = check();
+    sum.textContent = v ? '⏰ ' + t('endAt') + ' ' + v + (T.toMin(v) > s0 ? ' · ' + t('endTotal') + ' ' + hmc(T.toMin(v) - s0) : '') + (o.toxic && !e ? ' · ' + Math.ceil((T.toMin(v) - s0) / 15) + ' 🎟' : '') : '⏱ ' + t('endNone');
+    const nm = T.toMin(now().time);
+    if (v && !e && T.toMin(v) <= nm && o.start() <= now().time) sum.textContent += ' · ⚠️ ' + t('endPast');
+    err.hidden = !e; err.textContent = e;
+  };
+  other.addEventListener('input', draw); clock.addEventListener('input', draw); clock.addEventListener('change', draw);
+  draw();
+  return { el: wrap, value, check, redraw: draw };
+}
+function nextPlanAfter(kid, date, fromHM, exceptRef) {
+  const s = T.toMin(fromHM);
+  return db().plan.filter((p) => p.kid === kid && p.date === date && p.ref !== exceptRef && T.toMin(p.from) > s).sort((a, b) => T.toMin(a.from) - T.toMin(b.from))[0] || null;
+}
+function endSheet(w) {
+  const k = kidObj(w.kid), plan = w.planRef ? db().plan.find((p) => p.ref === w.planRef) : null;
+  const nx = nextPlanAfter(w.kid, w.date, now().time, plan ? plan.ref : '');
+  const pk = endPicker({ start: () => w.from, plan, next: nx ? { from: nx.from, task: nx.task } : null, toxic: false, current: w.due || '' });
+  const box = el('div', null, sheetHead(w.task, (k ? k.emoji + ' ' + k.name + ' · ' : '') + t('started') + ' ' + w.from), pk.el);
+  add(box, el('div', { class: 'sbtns' }, el('button', { class: 'btn', onclick: closeSheet }, t('cancel')), el('button', { class: 'btn pri', style: k ? `background:${k.color}` : '', onclick: () => {
+    if (pk.check()) return pk.redraw();
+    audioCtx();
+    act('setDue', { ref: w.ref, due: pk.value() }).then(() => { closeSheet(); render(); toast('⏰ ' + t('endSaved')); }).catch((x) => toast(errMsg(x)));
+  } }, t('save'))));
+  openSheet(box);
+}
 function startSheet(k, task, plan) {
   const d = db(), n = now(), tk = T.taskOf(d, task), poison = tk.nature === 'Toxic' && !k.adult, box = el('div');
   add(box, sheetHead(task, k.emoji + ' ' + k.name + (plan ? ' · ' + t('planned') + ' ' + plan.from + '–' + plan.to : '')));
@@ -2235,22 +2319,23 @@ function startSheet(k, task, plan) {
   const tf = timeField(plan && T.toMin(plan.from) < T.toMin(n.time) && plan.date === n.date ? plan.from : n.time);
   tf.hidden = true;
   const wo = el('div', { class: 'opts' });
-  const drawW = () => { wo.innerHTML = ''; [['now', t('now')], ['at', t('startAt')]].forEach(([v, l]) => add(wo, el('button', { class: 'opt' + (when === v ? ' on' : ''), onclick: () => { when = v; tf.hidden = v !== 'at'; drawW(); } }, l))); };
+  let pkRef = null;
+  const drawW = () => { wo.innerHTML = ''; [['now', t('now')], ['at', t('startAt')]].forEach(([v, l]) => add(wo, el('button', { class: 'opt' + (when === v ? ' on' : ''), onclick: () => { when = v; tf.hidden = v !== 'at'; drawW(); if (pkRef) pkRef(); } }, l))); };
   drawW();
   add(box, [el('label', { class: 'f', text: t('start') }), wo, tf]);
-  let nT = 1;
   const bal = T.balance(d, k.name);
-  if (poison) {
-    // the planned slot's tickets are used automatically; +1 while playing gives more time
-    nT = Math.max(1, Math.min(bal, plan ? Math.max(1, Math.floor(T.span(plan.from, plan.to) / 15)) : 1));
-    add(box, el('div', { class: 'card', style: 'margin-top:10px;padding:10px;box-shadow:none;background:var(--soft)' },
-      el('div', { class: 'b', style: 'font-size:17px', text: bal < 1 ? '🎟 0 – ' + t('noTickets') : t('usesTickets') + ' ' + nT + ' 🎟 = ' + nT * 15 + ' min' }),
-      el('div', { class: 'small muted', text: t('ticketsHave') + ' ' + bal + ' 🎟 · ' + t('moreLater') }),
-      el('div', { class: 'small muted', text: t('overWarn') })));
-  }
+  const startHM = () => (when === 'at' && tf.value ? tf.value : now().time);
+  const nx = nextPlanAfter(k.name, plan && powers() ? plan.date : n.date, startHM(), plan ? plan.ref : '');
+  const pk = endPicker({ start: startHM, plan, next: nx ? { from: nx.from, task: nx.task } : null, toxic: poison, bal });
+  tf.addEventListener('input', pk.redraw); tf.addEventListener('change', pk.redraw); pkRef = pk.redraw;
+  add(box, pk.el);
+  if (poison) add(box, el('div', { class: 'small muted', style: 'margin-top:6px', text: (bal < 1 ? '🎟 0 – ' + t('noTickets') : t('ticketsHave') + ' ' + bal + ' 🎟') + ' · ' + t('overWarn') }));
   const e = el('div', { class: 'err', hidden: true });
   const go = (finishRunning) => {
-    const p = { kid: k.name, task, planRef: plan ? plan.ref : '', tickets: nT, finishRunning: !!finishRunning };
+    const pe = pk.check();
+    if (pe) { pk.redraw(); return; }
+    const due = pk.value();
+    const p = { kid: k.name, task, planRef: plan ? plan.ref : '', due, tickets: due ? Math.ceil((T.toMin(due) - T.toMin(startHM())) / 15) : 1, finishRunning: !!finishRunning };
     if (when === 'at') p.at = tf.value;
     if (powers() && plan) p.date = plan.date;
     audioCtx();
