@@ -107,6 +107,32 @@ h3{margin:0 0 8px;font-size:16px}
 .nowline::before{content:"";position:absolute;left:-5px;top:-6px;width:10px;height:10px;border-radius:50%;background:var(--now)}
 .wk .blk{left:1px;right:1px;padding:1px 3px;font-size:11px;border-radius:5px}
 .blk.ro{cursor:default}
+.rcard{box-shadow:none;border:1px solid var(--line);margin-top:12px}
+.lg{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.rpm{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px;margin-top:10px}
+.rpp{display:flex;align-items:flex-end;gap:5px;height:110px;border-bottom:1px solid var(--line);padding:0 2px}
+.rpc{flex:1;position:relative;height:100%;display:flex;align-items:flex-end;justify-content:center;border:0;background:none;padding:0;cursor:pointer;min-width:0}
+.rpb{position:absolute;bottom:0;left:0;right:0;border-radius:4px 4px 0 0}
+.rpd{position:relative;display:block;width:56%;border-radius:4px 4px 0 0}
+.rpl{display:flex;gap:5px;padding:4px 2px 0;font-size:11px;color:var(--muted)}.rpl span{flex:1;text-align:center}
+.rpt{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,2fr) 96px;gap:10px;align-items:center;padding:3px 0;width:100%;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.rpt .tn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+.rpt .tk{position:relative;height:12px}
+.rpt .tk i{position:absolute;left:0;top:0;bottom:0;border-radius:0 4px 4px 0}
+.rpt .tk i.td{top:3px;bottom:3px}
+.rpt .tv{text-align:right;font-variant-numeric:tabular-nums}
+.evp{display:inline-block;flex:none;min-width:98px;text-align:center;color:#fff;font-size:12px;font-weight:700;border-radius:999px;padding:3px 10px;margin-right:6px;font-variant-numeric:tabular-nums}
+.rshort{color:#d97706}.rover{color:var(--bad)}
+@media (max-width:560px){.rpt{grid-template-columns:minmax(0,1fr) 92px;row-gap:3px}.rpt .tk{grid-column:1/-1;grid-row:2}}
+.rtw{overflow-x:auto;margin-top:8px}
+.rtbl{width:100%;min-width:600px;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+.rtbl th,.rtbl td{padding:5px 4px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+.rtbl th{font-weight:600;color:var(--muted);font-size:12px}
+.rtbl .n{text-align:left;max-width:190px;overflow:hidden;text-overflow:ellipsis}
+.rtbl tr.g td{font-weight:700;background:var(--soft)}
+.rtbl tr.tot td{font-weight:700;border-top:2px solid var(--line)}
+.rtbl .wk{border-left:1px solid var(--line)}
+.rtbl .pl{color:var(--muted);font-size:11px}
 .blk.liv{background:var(--soft)!important;box-shadow:none!important;color:var(--muted)!important;opacity:1;border-radius:6px;padding:0 6px;font-size:11px;display:flex;align-items:center}
 .blk.liv .n{font-weight:600}
 .blk.liv.ok::after,.blk.liv.chg::after{content:none}
@@ -193,6 +219,7 @@ var FP = (function () {
   var RED_MIN = 15;        // every full 15 min overrun → 1 red card
   var AUTO_FINISH_MIN = 30;
   var DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  var REPORT_NATURES = ['Academic', 'Development', 'Toxic']; // Living is left out of reports
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
   /* ---------- sheet layouts (column key, header) ---------- */
@@ -1192,6 +1219,23 @@ var FP = (function () {
           if (w.status === 'Done') byN[natureOf(db, w.task)].done += +w.min || span(w.from, w.to);
           if (w.status === 'Running') byN[natureOf(db, w.task)].done += Math.max(0, abs(now.date, now.time) - abs(w.date, w.from));
         });
+        // each day × each task (Living is not part of the report)
+        var tm = {}, z7 = function () { return [0, 0, 0, 0, 0, 0, 0]; };
+        var trow = function (t) { return tm[t] || (tm[t] = { task: t, nature: natureOf(db, t), emoji: taskOf(db, t).emoji, plan: z7(), done: z7() }); };
+        plans.forEach(function (p) { var i = daysBetween(ws, p.date); if (REPORT_NATURES.indexOf(natureOf(db, p.task)) >= 0 && i >= 0 && i < 7) trow(p.task).plan[i] += span(p.from, p.to); });
+        dones.forEach(function (w) {
+          var i = daysBetween(ws, w.date);
+          if (REPORT_NATURES.indexOf(natureOf(db, w.task)) < 0 || i < 0 || i > 6) return;
+          var m = w.status === 'Done' ? (+w.min || span(w.from, w.to)) : w.status === 'Running' ? Math.max(0, abs(now.date, now.time) - abs(w.date, w.from)) : 0;
+          if (m > 0) trow(w.task).done[i] += m;
+        });
+        var sum7 = function (a) { return a.reduce(function (x, y) { return x + y; }, 0); };
+        var taskRows = Object.keys(tm).map(function (t) { return tm[t]; }).sort(function (a, b) {
+          return REPORT_NATURES.indexOf(a.nature) - REPORT_NATURES.indexOf(b.nature) || sum7(b.plan) - sum7(a.plan) || sum7(b.done) - sum7(a.done) || (a.task < b.task ? -1 : 1);
+        });
+        var days = {};
+        REPORT_NATURES.forEach(function (n) { days[n] = { plan: z7(), done: z7() }; });
+        taskRows.forEach(function (r) { for (var i = 0; i < 7; i++) { days[r.nature].plan[i] += r.plan[i]; days[r.nature].done[i] += r.done[i]; } });
         var st = { total: 0, onTime: 0, late: 0, overran: 0, changed: 0, cancelled: 0, missed: 0, open: 0, lateMin: 0, overMin: 0 };
         var missedList = [];
         plans.forEach(function (p) {
@@ -1208,7 +1252,7 @@ var FP = (function () {
           if (s.state === 'done' && s.late < 5 && s.over < 5) st.onTime++;
         });
         st.pct = st.total ? Math.round(100 * (st.total - st.missed - st.cancelled) / st.total) : 0;
-        var unplanned = dones.filter(function (w) { return !w.planRef && w.status === 'Done'; });
+        var unplanned = dones.filter(function (w) { return !w.planRef && w.status === 'Done' && natureOf(db, w.task) !== 'Living'; });
         var tk = db.tickets.filter(function (t) { return t.kid === k.name; });
         var startBal = 0, flow = { Earned: 0, Granted: 0, Used: 0, Refund: 0, Deducted: 0, 'Card deduction': 0 };
         tk.forEach(function (t) {
@@ -1225,7 +1269,7 @@ var FP = (function () {
         dones.forEach(function (w) { if (w.status === 'Done') taskMin[w.task] = (taskMin[w.task] || 0) + (+w.min || 0); });
         var top = Object.keys(taskMin).filter(function (t) { return natureOf(db, t) !== 'Living'; }).sort(function (a, b) { return taskMin[b] - taskMin[a]; }).slice(0, 5).map(function (t) { return { task: t, min: taskMin[t] }; });
         return {
-          kid: k, byNature: byN, stats: st, missed: missedList, unplanned: unplanned, top: top, slots: slots,
+          kid: k, byNature: byN, days: days, tasks: taskRows, stats: st, missed: missedList, unplanned: unplanned, top: top, slots: slots,
           tickets: { start: startBal, flow: flow, now: balance(db, k.name) },
           cards: {
             yellow: wkCards.filter(function (c) { return c.color === 'Yellow'; }).length,
@@ -1250,8 +1294,8 @@ var FP = (function () {
 
   /* ---------- words (English / 繁體中文) ---------- */
   var I18N = {
-    en: { Academic: 'Academic', Development: 'Development', Living: 'Living', Toxic: 'Toxic', report: 'Weekly report', inProgress: 'week in progress', planned: 'Planned', done: 'Done', onPlan: 'Plan completed', onTime: 'On time', late: 'Late', overran: 'Overran', changed: 'Changed', cancelled: 'Cancelled', missed: 'Missed', unplanned: 'Unplanned', tickets: 'Tickets', cards: 'Cards', earned: 'Earned', granted: 'Granted', used: 'Used', deducted: 'Deducted', balance: 'Balance', yellow: 'Yellow', red: 'Red', targets: 'Targets', daysLeft: 'days left', overdue: 'overdue', topTasks: 'Most time on', notes: 'What they found and did', slotLost: 'not earned', slotEarned: 'earned', poisonSlots: 'Toxic slots', open: 'Open the planner', startBal: 'start', cardDeduct: 'Card deduction', pending: 'to deduct at report', refund: 'Refund' },
-    zh: { Academic: '學術', Development: '發展', Living: '生活', Toxic: '有毒', report: '每週報告', inProgress: '本週進行中', planned: '計劃', done: '實際', onPlan: '計劃完成率', onTime: '準時', late: '遲開始', overran: '超時', changed: '改了任務', cancelled: '取消', missed: '錯過', unplanned: '計劃外', tickets: '票', cards: '牌', earned: '賺得', granted: '家長發', used: '使用', deducted: '扣除', balance: '餘額', yellow: '黃牌', red: '紅牌', targets: '目標', daysLeft: '天', overdue: '已過期', topTasks: '最多時間', notes: '發現和做了什麼', slotLost: '未賺得', slotEarned: '已賺得', poisonSlots: '有毒時段', open: '打開 Planner', startBal: '週初', cardDeduct: '紅牌扣票', pending: '報告時扣除', refund: '退回' }
+    en: { Academic: 'Academic', Development: 'Development', Living: 'Living', Toxic: 'Toxic', report: 'Weekly report', inProgress: 'week in progress', planned: 'Planned', done: 'Done', onPlan: 'Plan completed', onTime: 'On time', late: 'Late', overran: 'Overran', changed: 'Changed', cancelled: 'Cancelled', missed: 'Missed', unplanned: 'Unplanned', tickets: 'Tickets', cards: 'Cards', earned: 'Earned', granted: 'Granted', used: 'Used', deducted: 'Deducted', balance: 'Balance', yellow: 'Yellow', red: 'Red', targets: 'Targets', daysLeft: 'days left', overdue: 'overdue', topTasks: 'Most time on', byTask: 'Each day and task', weekCol: 'Week', wd: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], total: 'Total', notes: 'What they found and did', slotLost: 'not earned', slotEarned: 'earned', poisonSlots: 'Toxic slots', open: 'Open the planner', startBal: 'start', cardDeduct: 'Card deduction', pending: 'to deduct at report', refund: 'Refund' },
+    zh: { Academic: '學術', Development: '發展', Living: '生活', Toxic: '有毒', report: '每週報告', inProgress: '本週進行中', planned: '計劃', done: '實際', onPlan: '計劃完成率', onTime: '準時', late: '遲開始', overran: '超時', changed: '改了任務', cancelled: '取消', missed: '錯過', unplanned: '計劃外', tickets: '票', cards: '牌', earned: '賺得', granted: '家長發', used: '使用', deducted: '扣除', balance: '餘額', yellow: '黃牌', red: '紅牌', targets: '目標', daysLeft: '天', overdue: '已過期', topTasks: '最多時間', byTask: '每天 × 每項任務', weekCol: '全週', wd: ['一', '二', '三', '四', '五', '六', '日'], total: '合計', notes: '發現和做了什麼', slotLost: '未賺得', slotEarned: '已賺得', poisonSlots: '有毒時段', open: '打開 Planner', startBal: '週初', cardDeduct: '紅牌扣票', pending: '報告時扣除', refund: '退回' }
   };
 
   function reportHtml(rep, db, lang, appUrl) {
@@ -1264,7 +1308,7 @@ var FP = (function () {
       h += '<div style="border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin-bottom:16px">';
       h += '<div style="font-size:19px;font-weight:700">' + esc(k.kid.emoji) + ' ' + esc(k.kid.name) + ' <span style="font-weight:500;color:#6b7280;font-size:15px">· ' + esc(L.onPlan) + ' ' + s.pct + '%</span></div>';
       h += '<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;margin-top:10px;font-size:14px"><tr style="color:#6b7280"><td></td><td style="text-align:right;padding:3px 6px">' + esc(L.planned) + '</td><td style="text-align:right;padding:3px 6px">' + esc(L.done) + '</td></tr>';
-      NATURES.forEach(function (n) {
+      REPORT_NATURES.forEach(function (n) {
         var b = k.byNature[n];
         h += '<tr><td style="padding:3px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:' + NATURE_COLOR[n] + ';margin-right:6px"></span>' + esc(L[n]) + '</td><td style="text-align:right;padding:3px 6px">' + hm(b.plan) + '</td><td style="text-align:right;padding:3px 6px;font-weight:700">' + hm(b.done) + '</td></tr>';
       });
@@ -1274,7 +1318,7 @@ var FP = (function () {
       if (k.slots.length) {
         h += '<div style="margin-top:8px;font-size:13px;color:#374151">' + esc(L.poisonSlots) + ': ' + k.slots.map(function (x) { return esc(shortD(x.plan.date)) + ' ' + esc(x.plan.task) + ' – ' + (x.s.state === 'earned' ? '✅ ' + esc(L.slotEarned) + ' ' + x.s.n : x.s.state === 'lost' ? '❌ ' + esc(L.slotLost) : '…'); }).join(' · ') + '</div>';
       }
-      if (k.top.length) h += '<div style="margin-top:8px;font-size:13px;color:#374151">' + esc(L.topTasks) + ': ' + k.top.map(function (x) { return esc(x.task) + ' ' + hm(x.min); }).join(' · ') + '</div>';
+      if (k.tasks && k.tasks.length) h += taskTableHtml(k, L);
       if (k.targets.length) {
         h += '<div style="margin-top:10px;font-weight:700">' + esc(L.targets) + '</div><ul style="margin:4px 0 0 18px;padding:0;font-size:14px">';
         k.targets.forEach(function (g) {
@@ -1293,12 +1337,37 @@ var FP = (function () {
     if (u) h += '<p><a href="' + esc(u) + '" style="color:#2563eb">' + esc(L.open) + '</a></p>';
     return h + '</div>';
   }
+  function hmc(m) { m = Math.round(m || 0); return m ? Math.floor(m / 60) + ':' + pad(m % 60) : '–'; }
+  function taskTableHtml(k, L) {
+    var td = 'padding:3px 4px;text-align:right;border-bottom:1px solid #eef0f3;white-space:nowrap';
+    var cell = function (p, d, tox) {
+      var col = tox && d > p ? '#dc2626' : (!tox && p && d < p ? '#b45309' : '#111827');
+      return '<span style="color:' + col + '">' + hmc(d) + '</span>' + (p ? '<span style="color:#9ca3af;font-size:11px">/' + hmc(p) + '</span>' : '');
+    };
+    var line = function (label, plan, done, tox, strong) {
+      var x = '<tr' + (strong ? ' style="background:#f3f4f6;font-weight:700"' : '') + '><td style="' + td + ';text-align:left;max-width:170px;overflow:hidden">' + label + '</td>';
+      for (var i = 0; i < 7; i++) x += '<td style="' + td + '">' + cell(plan[i], done[i], tox) + '</td>';
+      var sp = plan.reduce(function (a, b) { return a + b; }, 0), sd = done.reduce(function (a, b) { return a + b; }, 0);
+      return x + '<td style="' + td + ';border-left:1px solid #e5e7eb">' + cell(sp, sd, tox) + '</td></tr>';
+    };
+    var h = '<div style="margin-top:12px;font-weight:700">' + esc(L.byTask) + '</div>';
+    h += '<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;font-size:12px;margin-top:4px"><tr style="color:#6b7280"><td style="' + td + '"></td>';
+    (L.wd || DAYS).forEach(function (d) { h += '<td style="' + td + '">' + esc(d) + '</td>'; });
+    h += '<td style="' + td + ';border-left:1px solid #e5e7eb">' + esc(L.weekCol || 'Week') + '</td></tr>';
+    REPORT_NATURES.forEach(function (n) {
+      var rows = k.tasks.filter(function (r) { return r.nature === n; });
+      if (!rows.length) return;
+      h += line('<span style="display:inline-block;width:9px;height:9px;border-radius:3px;background:' + NATURE_COLOR[n] + ';margin-right:5px"></span>' + esc(L[n]), k.days[n].plan, k.days[n].done, n === 'Toxic', true);
+      rows.forEach(function (r) { h += line(esc((r.emoji ? r.emoji + ' ' : '') + r.task), r.plan, r.done, n === 'Toxic', false); });
+    });
+    return h + '</table><div style="font-size:11px;color:#9ca3af;margin-top:3px">' + esc(L.done) + ' / ' + esc(L.planned) + '</div>';
+  }
   function fmtSigned(n) { return (n > 0 ? '+' : '') + n; }
   function reportText(rep, db, lang) {
     var L = I18N[lang] || I18N.en, out = [(db.settings.familyName || 'Family Planner') + ' – ' + L.report + ' · ' + rep.label, ''];
     rep.kids.forEach(function (k) {
       out.push(k.kid.emoji + ' ' + k.kid.name + ' — ' + L.onPlan + ' ' + k.stats.pct + '%');
-      NATURES.forEach(function (n) { out.push('  ' + L[n] + ': ' + hm(k.byNature[n].done) + ' / ' + hm(k.byNature[n].plan)); });
+      REPORT_NATURES.forEach(function (n) { out.push('  ' + L[n] + ': ' + hm(k.byNature[n].done) + ' / ' + hm(k.byNature[n].plan)); });
       out.push('  🎟 ' + L.balance + ' ' + k.tickets.now + ' · 🟨 ' + k.cards.yellow + ' · 🟥 ' + k.cards.red);
       k.targets.forEach(function (g) { out.push('  🎯 ' + g.title + ' – ' + (g.done ? '✅' : g.daysLeft + ' ' + L.daysLeft)); });
       out.push('');
@@ -1308,7 +1377,7 @@ var FP = (function () {
 
   return {
     NATURES: NATURES, NATURE_COLOR: NATURE_COLOR, TICKET_MIN: TICKET_MIN, YELLOW_MIN: YELLOW_MIN, RED_MIN: RED_MIN, AUTO_FINISH_MIN: AUTO_FINISH_MIN,
-    DAYS: DAYS, COLS: COLS, SHEET_NAMES: SHEET_NAMES, NUM_KEYS: NUM_KEYS, DATE_KEYS: DATE_KEYS, TIME_KEYS: TIME_KEYS, I18N: I18N,
+    DAYS: DAYS, REPORT_NATURES: REPORT_NATURES, COLS: COLS, SHEET_NAMES: SHEET_NAMES, NUM_KEYS: NUM_KEYS, DATE_KEYS: DATE_KEYS, TIME_KEYS: TIME_KEYS, I18N: I18N,
     pad: pad, isDate: isDate, isTime: isTime, addDays: addDays, dayIdx: dayIdx, weekStart: weekStart, weekDates: weekDates,
     toMin: toMin, fromMin: fromMin, abs: abs, absToDate: absToDate, span: span, uk: uk, shortD: shortD, weekLabel: weekLabel, daysBetween: daysBetween,
     normDate: normDate, normTime: normTime, esc: esc, safeUrl: safeUrl, hm: hm,
@@ -1382,7 +1451,7 @@ const W = {
     emailNow: '📧 Email report now', emailWarn: 'Sending also deducts pending red cards.', copyText: '📋 Copy as text', copied: 'Copied ✓', sent: 'Report emailed ✓',
     notes: 'What they found and did', noteDone: 'What you found and did', notePh: 'e.g. learned 8 new words; the hard part was…', missedList: 'Missed',
     rewards: 'Rewards', redeem: 'Redeem', needMore: 'more needed', redeemed: 'Redeemed – a parent will give it to you', recentRewards: 'Recent rewards', manageRewards: 'Rewards list', addReward: '＋ Add reward', saveRewards: 'Save rewards', cost: 'Cost',
-    undo: '↩️ Undo', undone: 'Undone ✓', copyWeek: 'Copy previous week here', autoFill: 'Next week is filled from the template automatically when the weekly report is sent', exportHist: 'Export history to Excel', myPic: 'My picture', pickIcon: 'Choose an icon', uploadPhoto: 'Upload a photo', takePhoto: 'Take or choose a photo', removePhoto: 'Remove photo', photoBad: 'That photo could not be read – try another one', picSaved: 'Picture changed ✓', tapToGrant: 'Tap 🎟 to grant or deduct', usesTickets: 'Uses', moreLater: 'Need more time? Tap +1 🎟 while playing.', hide: 'Hide', show: 'Show', trends: 'Trends – last 8 weeks', trendsTable: 'Show as a table', hoursOf: 'hours', weekOf: 'Week of', skip: 'Skip', reflect: 'Well done! What did you find and do?', slots: 'Toxic slots', topTasks: 'Most time on',
+    undo: '↩️ Undo', undone: 'Undone ✓', copyWeek: 'Copy previous week here', autoFill: 'Next week is filled from the template automatically when the weekly report is sent', eachDay: 'Each day', eachTask: 'Each task · whole week', byTaskT: 'Each day and task', mBoth: 'Done / plan', weekCol: 'Week', totalT: 'Total', lessPlan: 'less than planned', toxicOver: 'Toxic over plan', nothingWord: 'nothing', nothingYet: 'Nothing planned or done yet.', exportHist: 'Export history to Excel', myPic: 'My picture', pickIcon: 'Choose an icon', uploadPhoto: 'Upload a photo', takePhoto: 'Take or choose a photo', removePhoto: 'Remove photo', photoBad: 'That photo could not be read – try another one', picSaved: 'Picture changed ✓', tapToGrant: 'Tap 🎟 to grant or deduct', usesTickets: 'Uses', moreLater: 'Need more time? Tap +1 🎟 while playing.', hide: 'Hide', show: 'Show', trends: 'Trends – last 8 weeks', trendsTable: 'Show as a table', hoursOf: 'hours', weekOf: 'Week of', skip: 'Skip', reflect: 'Well done! What did you find and do?', slots: 'Toxic slots', topTasks: 'Most time on',
     addTarget: '＋ Add target', short: 'Short term', long: 'Long term', due: 'Due', daysLeft: 'days left', dueToday: 'Due today', overdue: 'Overdue', achieved: 'Achieved',
     kind: 'Type', count: 'Count (e.g. 10 spelling words)', hoursKind: 'Hours on a task', milestone: 'Milestone (done / not yet)', goal: 'Goal', progress: 'Progress', since: 'Count hours from', title: 'Target',
     events: 'Coming events · next 2 weeks', noEvents: 'No events in the next 2 weeks.', allDay: 'All day', refresh: 'Refresh', chooseCals: 'Choose calendars in Setup.',
@@ -1427,7 +1496,7 @@ const W = {
     emailNow: '📧 立即寄出報告', emailWarn: '寄出時也會扣除待扣的紅牌。', copyText: '📋 複製文字', copied: '已複製 ✓', sent: '報告已寄出 ✓',
     notes: '發現和做了什麼', noteDone: '你發現了什麼、做了什麼', notePh: '例如：學了 8 個新字；最難的是…', missedList: '錯過',
     rewards: '獎勵', redeem: '兌換', needMore: '張不夠', redeemed: '已兌換 – 家長會給你', recentRewards: '最近兌換', manageRewards: '獎勵清單', addReward: '＋ 新增獎勵', saveRewards: '儲存獎勵', cost: '票數',
-    undo: '↩️ 還原', undone: '已還原 ✓', copyWeek: '複製上一週到這週', autoFill: '每週報告寄出時，會自動用範本填好下一週', exportHist: '匯出歷史紀錄到 Excel', myPic: '我的頭像', pickIcon: '選一個圖示', uploadPhoto: '上傳相片', takePhoto: '拍照或選相片', removePhoto: '移除相片', photoBad: '這張相片讀不到，請換一張', picSaved: '頭像已更新 ✓', tapToGrant: '按 🎟 可發票或扣票', usesTickets: '使用', moreLater: '想玩久一點？進行中按 +1 🎟。', hide: '隱藏', show: '顯示', trends: '趨勢 – 最近 8 週', trendsTable: '以表格顯示', hoursOf: '小時', weekOf: '週', skip: '略過', reflect: '做得好！你發現了什麼、做了什麼？', slots: '有毒時段', topTasks: '最多時間',
+    undo: '↩️ 還原', undone: '已還原 ✓', copyWeek: '複製上一週到這週', autoFill: '每週報告寄出時，會自動用範本填好下一週', eachDay: '每一天', eachTask: '每項任務 · 全週', byTaskT: '每天 × 每項任務', mBoth: '完成 / 計劃', weekCol: '全週', totalT: '合計', lessPlan: '比計劃少', toxicOver: '有毒類超出計劃', nothingWord: '沒有', nothingYet: '還沒有計劃或紀錄。', exportHist: '匯出歷史紀錄到 Excel', myPic: '我的頭像', pickIcon: '選一個圖示', uploadPhoto: '上傳相片', takePhoto: '拍照或選相片', removePhoto: '移除相片', photoBad: '這張相片讀不到，請換一張', picSaved: '頭像已更新 ✓', tapToGrant: '按 🎟 可發票或扣票', usesTickets: '使用', moreLater: '想玩久一點？進行中按 +1 🎟。', hide: '隱藏', show: '顯示', trends: '趨勢 – 最近 8 週', trendsTable: '以表格顯示', hoursOf: '小時', weekOf: '週', skip: '略過', reflect: '做得好！你發現了什麼、做了什麼？', slots: '有毒時段', topTasks: '最多時間',
     addTarget: '＋ 新增目標', short: '短期', long: '長期', due: '到期', daysLeft: '天', dueToday: '今天到期', overdue: '已過期', achieved: '已達成',
     kind: '類型', count: '數量（例如 10 個生字）', hoursKind: '任務時數', milestone: '里程碑（達成 / 未達成）', goal: '目標值', progress: '進度', since: '時數由此日起計', title: '目標',
     events: '未來兩週的活動', noEvents: '未來兩週沒有活動。', allDay: '全日', refresh: '重新整理', chooseCals: '在「設定」選擇日曆。',
@@ -2075,7 +2144,7 @@ function calendarPoints(d) {
   const ev = (S.cal.events || []).filter((x) => x.date <= d && (x.endDate || x.date) >= d);
   if (!ev.length) return null;
   return el('div', { class: 'card', style: 'padding:10px 14px' }, el('div', { class: 'b', style: 'margin-bottom:4px', text: '📅 ' + t('calToday') }),
-    el('ul', { style: 'margin:0;padding-left:20px' }, ev.map((x) => el('li', { style: 'padding:2px 0' }, el('b', { text: x.allDay ? t('allDay') : x.start + '–' + x.end }), ' ' + x.title, el('span', { class: 'muted small', text: ' · ' + x.cal })))));
+    el('ul', { style: 'margin:0;padding-left:20px' }, ev.map((x) => el('li', { style: 'padding:2px 0' }, evPill(x), ' ' + x.title))));
 }
 
 /* ================= sheets for blocks ================= */
@@ -2308,6 +2377,87 @@ function viewWeek() {
   const rep = T.buildReport(db(), S.week, now()).kids.find((x) => x.kid.name === k.name);
   add(wrap, natureBars(rep));
   return wrap;
+}
+/* ---------- report: each day, each task, day × task table (no Living) ---------- */
+const hmc = (m) => (m ? Math.floor(m / 60) + ':' + T.pad(Math.round(m % 60)) : '–');
+const sum7 = (a) => a.reduce((x, y) => x + y, 0);
+const cmpCls = (p, d, tox) => (tox && d > p ? 'rover' : !tox && p && d < p ? 'rshort' : '');
+function legendDP() {
+  return el('div', { class: 'small muted' }, el('span', { class: 'lg', style: 'background:var(--muted)' }), t('actual') + '   ', el('span', { class: 'lg', style: 'background:var(--muted);opacity:.35' }), t('planned'));
+}
+function dayCharts(rk) {
+  const RN = T.REPORT_NATURES, box = el('div', { class: 'card rcard' }, el('div', { class: 'spread' }, el('h3', { style: 'margin:0', text: t('eachDay') }), legendDP()));
+  const max = Math.max(30, ...RN.flatMap((n) => rk.days[n].plan.concat(rk.days[n].done)));
+  const grid = el('div', { class: 'rpm' });
+  RN.forEach((n) => {
+    const g = rk.days[n], c = T.NATURE_COLOR[n], tp = sum7(g.plan), td = sum7(g.done);
+    const plot = el('div', { class: 'rpp' });
+    g.plan.forEach((p, i) => {
+      const d = g.done[i], msg = nat(n) + ' · ' + DAYN[LANG][i] + ' · ' + t('actual') + ' ' + hmc(d) + ' · ' + t('planned') + ' ' + hmc(p);
+      add(plot, el('button', { class: 'rpc', title: msg, 'aria-label': msg, onclick: () => toast(msg) }, el('i', { class: 'rpb', style: `height:${(100 * p) / max}%;background:${c}4D` }), el('i', { class: 'rpd', style: `height:${(100 * d) / max}%;background:${c}` })));
+    });
+    add(grid, el('div', null,
+      el('div', { class: 'small', style: 'margin-bottom:6px' }, el('span', { class: 'lg', style: `background:${c}` }), el('b', { text: nat(n) }), ' ', el('span', { class: cmpCls(tp, td, n === 'Toxic') + ' b', text: hmc(td) }), el('span', { class: 'muted', text: ' / ' + hmc(tp) + (tp ? ' · ' + Math.round((100 * td) / tp) + '%' : '') })),
+      plot, el('div', { class: 'rpl' }, DAYN[LANG].map((x) => el('span', { text: x })))));
+  });
+  add(box, grid);
+  return box;
+}
+function taskBars(rk) {
+  const rows = rk.tasks || [];
+  const box = el('div', { class: 'card rcard' }, el('div', { class: 'spread' }, el('h3', { style: 'margin:0', text: t('eachTask') }), legendDP()));
+  if (!rows.length) { add(box, el('div', { class: 'muted small', style: 'margin-top:8px', text: t('nothingYet') })); return box; }
+  const max = Math.max(30, ...rows.map((r) => Math.max(sum7(r.plan), sum7(r.done))));
+  T.REPORT_NATURES.forEach((n) => {
+    const rs = rows.filter((r) => r.nature === n), c = T.NATURE_COLOR[n];
+    if (!rs.length) return;
+    add(box, el('div', { class: 'small muted', style: 'margin:10px 0 2px' }, el('span', { class: 'lg', style: `background:${c}` }), nat(n)));
+    rs.forEach((r) => {
+      const p = sum7(r.plan), d = sum7(r.done), msg = r.task + ' · ' + t('actual') + ' ' + hmc(d) + ' · ' + t('planned') + ' ' + hmc(p);
+      add(box, el('button', { class: 'rpt', title: msg, onclick: () => toast(msg) },
+        el('span', { class: 'tn', text: (r.emoji ? r.emoji + ' ' : '') + r.task }),
+        el('span', { class: 'tk' }, el('i', { style: `width:${(100 * p) / max}%;background:${c}4D` }), el('i', { class: 'td', style: `width:${(100 * d) / max}%;background:${c}` })),
+        el('span', { class: 'tv' }, el('span', { class: cmpCls(p, d, n === 'Toxic') + ' b', text: hmc(d) }), el('span', { class: 'muted small', text: ' / ' + hmc(p) }))));
+    });
+  });
+  return box;
+}
+function taskTable(rk) {
+  const box = el('div', { class: 'card rcard' });
+  const draw = () => {
+    box.innerHTML = '';
+    const mode = S.repMode || 'both', seg = el('div', { class: 'row', style: 'gap:4px' });
+    [['both', t('mBoth')], ['done', t('actual')], ['plan', t('planned')]].forEach(([m, l]) => add(seg, el('button', { class: 'btn sm' + (mode === m ? ' on' : ''), style: mode === m ? 'background:var(--soft);border-color:var(--ink)' : '', onclick: () => { S.repMode = m; draw(); } }, l)));
+    add(box, el('div', { class: 'spread wrap', style: 'gap:8px' }, el('h3', { style: 'margin:0', text: t('byTaskT') }), seg));
+    const rows = rk.tasks || [];
+    if (!rows.length) { add(box, el('div', { class: 'muted small', style: 'margin-top:8px', text: t('nothingYet') })); return; }
+    const cell = (p, d, tox) => {
+      if (mode === 'plan') return el('td', { text: hmc(p) });
+      const main = el('span', { class: cmpCls(p, d, tox), text: hmc(d) });
+      return el('td', null, main, mode === 'both' && p ? el('span', { class: 'pl', text: '/' + hmc(p) }) : null);
+    };
+    const line = (label, plan, done, tox, cls) => {
+      const tr = el('tr', { class: cls || '' }, el('td', { class: 'n', title: typeof label === 'string' ? label : '' }, label));
+      for (let i = 0; i < 7; i++) add(tr, cell(plan[i], done[i], tox));
+      const w = cell(sum7(plan), sum7(done), tox); w.classList.add('wk'); add(tr, w);
+      return tr;
+    };
+    const tb = el('tbody');
+    add(tb, el('tr', null, el('th', { class: 'n', text: '' }), DAYN[LANG].map((x) => el('th', { text: x })), el('th', { class: 'wk', text: t('weekCol') })));
+    const allP = [0, 0, 0, 0, 0, 0, 0], allD = [0, 0, 0, 0, 0, 0, 0];
+    T.REPORT_NATURES.forEach((n) => {
+      const rs = rows.filter((r) => r.nature === n), g = rk.days[n];
+      if (!rs.length) return;
+      for (let i = 0; i < 7; i++) { allP[i] += g.plan[i]; allD[i] += g.done[i]; }
+      add(tb, line(el('span', null, el('span', { class: 'lg', style: `background:${T.NATURE_COLOR[n]}` }), nat(n)), g.plan, g.done, n === 'Toxic', 'g'));
+      rs.forEach((r) => add(tb, line((r.emoji ? r.emoji + ' ' : '') + r.task, r.plan, r.done, n === 'Toxic')));
+    });
+    add(tb, line(t('totalT'), allP, allD, false, 'tot'));
+    add(box, el('div', { class: 'rtw' }, el('table', { class: 'rtbl' }, tb)));
+    add(box, el('div', { class: 'small muted', style: 'margin-top:6px' }, el('span', { class: 'rshort', text: '0:20' }), ' ' + t('lessPlan') + ' · ', el('span', { class: 'rover', text: '1:15' }), ' ' + t('toxicOver') + ' · – ' + t('nothingWord')));
+  };
+  draw();
+  return box;
 }
 function natureBars(rk) {
   const box = el('div', { class: 'card bars' }, el('h3', { text: t('hours') + ' · ' + t('planned') + ' / ' + t('actual') }));
@@ -2689,7 +2839,7 @@ function reportCard(rk, rep) {
   add(card, el('div', { class: 'strip', style: 'margin:10px 0' },
     ...[['✅', t('onTime'), s.onTime], ['⏰', t('late'), s.late + (s.lateMin ? ' (' + s.lateMin + 'm)' : '')], ['⏱', t('overran'), s.overran + (s.overMin ? ' (' + s.overMin + 'm)' : '')], ['↺', t('changed'), s.changed], ['✕', t('cancelled'), s.cancelled], ['⚠️', t('missed'), s.missed], ['➕', t('unplanned'), rk.unplanned.length]]
       .map(([i, l, v]) => el('span', { class: 'pill', style: 'font-size:13px;padding:5px 10px', text: i + ' ' + l + ' ' + v }))));
-  add(card, natureBars(rk));
+  add(card, [dayCharts(rk), taskBars(rk), taskTable(rk)]);
   const tk = rk.tickets, f = tk.flow;
   const tcard = el('div', { class: 'card', style: 'box-shadow:none;background:var(--soft)' });
   add(tcard, el('div', { class: 'spread' }, el('div', { class: 'cnt', style: tk.now < 0 ? 'color:var(--bad)' : '', text: '🎟 ' + tk.now }), isParent() ? el('button', { class: 'btn sm', onclick: () => ticketSheet(k) }, t('grant')) : null));
@@ -2707,7 +2857,6 @@ function reportCard(rk, rep) {
   add(det, el('table', { class: 'tbl', style: 'margin-top:8px' }, el('tbody', null, ledger.map((x) => el('tr', null, el('td', { class: 'small', text: dlabel(x.date) }), el('td', { class: 'num b', style: `color:${x.change < 0 ? 'var(--bad)' : 'var(--good)'}`, text: (x.change > 0 ? '+' : '') + x.change }), el('td', { class: 'small', text: x.kind + ' · ' + x.reason + (x.relRef ? ' (' + x.relRef + ')' : '') }))))));
   add(card, det);
   if (rk.missed.length) add(card, el('div', { class: 'small', style: 'margin-top:8px' }, el('b', { text: t('missedList') + ': ' }), rk.missed.slice(-10).map((p) => dlabel(p.date) + ' ' + p.from + ' ' + p.task).join(' · ') + (rk.missed.length > 10 ? ' (+' + (rk.missed.length - 10) + ')' : '')));
-  if (rk.top.length) add(card, el('div', { class: 'small', style: 'margin-top:6px' }, el('b', { text: t('topTasks') + ': ' }), rk.top.map((x) => x.task + ' ' + T.hm(x.min)).join(' · ')));
   if (rk.notes.length) add(card, el('div', { class: 'small', style: 'margin-top:6px' }, el('b', { text: t('notes') + ': ' }), rk.notes.slice(0, 8).map((x) => dlabel(x.date) + ' ' + x.task + ': ' + x.note).join(' · ')));
   const tg = S.v.targets.filter((x) => x.kid === k.name && !x.done);
   if (tg.length) add(card, el('div', { class: 'small', style: 'margin-top:6px' }, el('b', { text: '🎯 ' }), tg.map((x) => x.title + ' – ' + countdown(x)).join(' · ')));
@@ -2812,6 +2961,13 @@ function rewardsEditor() {
 }
 
 /* ================= CALENDAR ================= */
+/* time label of a calendar event: a coloured pill (the Google calendar colour, or teal when that colour is grey) */
+function evPill(x) {
+  let c = /^#[0-9a-f]{6}$/i.test(x.color || '') ? x.color : '';
+  if (c) { const v = [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16)); if (Math.max(...v) - Math.min(...v) < 48) c = ''; }
+  const v2 = [1, 3, 5].map((i) => parseInt((c || '#0f766e').slice(i, i + 2), 16)), light = 0.299 * v2[0] + 0.587 * v2[1] + 0.114 * v2[2] > 150;
+  return el('span', { class: 'evp', style: `background:${c || '#0f766e'};color:${light ? '#1f2933' : '#fff'}`, text: x.allDay ? t('allDay') : x.start + '–' + x.end });
+}
 function viewCalendar() {
   const wrap = el('div');
   add(wrap, el('div', { class: 'spread', style: 'margin:0 4px 10px' }, el('h3', { style: 'margin:0', text: '📅 ' + t('events') }), el('button', { class: 'btn sm', onclick: () => { S.cal = null; render(); } }, t('refresh'))));
@@ -2826,9 +2982,8 @@ function viewCalendar() {
     const list = el('div', { class: 'list' });
     ev.forEach((x) => {
       if (x.date !== last) { last = x.date; add(list, el('div', { class: 'b', style: 'padding:12px 2px 4px', text: dlong(x.date) + (x.date === now().date ? ' · ' + t('today') : '') })); }
-      add(list, el('div', { class: 'it' }, el('span', { class: 'dot', style: `background:${/^#[0-9a-f]{6}$/i.test(x.color) ? x.color : '#64748b'};border-radius:50%` }),
-        el('div', { style: 'width:92px;flex:none', class: 'small b', text: x.allDay ? t('allDay') : x.start + '–' + x.end }),
-        el('div', { style: 'flex:1' }, el('div', { text: x.title }), el('div', { class: 'small muted', text: x.cal + (x.endDate && x.endDate !== x.date ? ' · → ' + dlong(x.endDate) : '') }))));
+      add(list, el('div', { class: 'it' }, evPill(x),
+        el('div', { style: 'flex:1;min-width:0' }, el('div', { text: x.title }), x.endDate && x.endDate !== x.date ? el('div', { class: 'small muted', text: '→ ' + dlong(x.endDate) }) : null)));
     });
     add(box, list);
     if (isParent()) add(box, el('p', { class: 'small muted', text: t('chooseCals') }));
