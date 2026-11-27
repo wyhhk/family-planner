@@ -108,6 +108,13 @@ h3{margin:0 0 8px;font-size:16px}
 .nowline::before{content:"";position:absolute;left:-5px;top:-6px;width:10px;height:10px;border-radius:50%;background:var(--now)}
 .wk .blk{left:1px;right:1px;padding:1px 3px;font-size:11px;border-radius:5px}
 .blk.ro{cursor:default}
+.btn.loading{pointer-events:none;opacity:.85}
+.btn.loading::before{content:'';display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;margin-right:8px;vertical-align:-2px;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+body.working #sheet button,body.working #sheet input,body.working #sheet select{pointer-events:none}
+body.working::before{content:'';position:fixed;left:0;top:0;height:3px;width:40%;background:#0f766e;z-index:99;animation:slide 1s ease-in-out infinite}
+@keyframes slide{0%{left:-40%}100%{left:100%}}
+#busyPill{position:fixed;left:50%;bottom:calc(18px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#0f766e;color:#fff;border-radius:999px;padding:8px 16px;font-weight:700;font-size:14px;z-index:98;box-shadow:0 6px 20px rgba(0,0,0,.25)}
 .rcard{box-shadow:none;border:1px solid var(--line);margin-top:12px}
 .lg{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
 .rpm{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px;margin-top:10px}
@@ -208,6 +215,7 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:none;border
   <main id="view"><div class="card center muted">Loading…</div></main>
 </div>
 <div id="sheetWrap" class="sheet-wrap" hidden><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
+<div id="busyPill" hidden></div>
 <div id="toast" class="toast" hidden></div>
 <script>
 /* ===== Family Planner v2 – shared engine (runs in the app, the preview and Google Apps Script) ===== */
@@ -1710,12 +1718,15 @@ function setSync(state, msg) {
   b.title = msg || '';
 }
 function call(action, payload, extra) {
+  const t0 = Date.now();
   return Promise.resolve().then(() => transport(req(action, payload, extra))).then((r) => {
+    S.lastMs = Date.now() - t0;
     if (!r.ok) { const e = new Error(r.error || 'Error'); if (r.error === 'BAD_CODE') { S.code = ''; store.set('fp2-code', ''); } throw e; }
     return r.data;
   });
 }
-function setView(v) { S.v = v; S.loadedAt = Date.now(); }
+const vKey = () => (S.who || '') + '|' + (S.parent || '') + '|' + JSON.stringify(rangeWide());
+function setView(v) { S.v = v; S.loadedAt = Date.now(); S.vKey = vKey(); }
 // the GitHub site without an Apps Script link in config.js must never fall back to sample data
 const UNSET = !!window.FP_SITE && MODE === 'demo';
 function renderUnset() {
@@ -1737,15 +1748,27 @@ function refresh(manual) {
   if (S.busy) return Promise.resolve();
   if (!manual && (sheetOpen() || S.tab === 'setup' || S.tplDraft || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || ''))) return Promise.resolve();
   S.busy++; if (!S.v) setSync('busy');
-  return call('load').then((v) => { setView(v); setSync('ok'); render(); })
+  const quick = !manual && S.v && S.v.ver && S.vKey === vKey() && Date.now() - S.loadedAt < 120000;
+  return call('load', null, quick ? { ver: S.v.ver } : null).then((v) => { if (v && v.same) { setSync('ok'); return; } setView(v); setSync('ok'); render(); })
     .catch((e) => { setSync('err', e.message); if (e.message === 'BAD_CODE') renderPair(); else if (!S.v) renderError(e.message); })
     .finally(() => { S.busy--; });
 }
+document.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('button'); if (b) { S.lastBtn = b; S.lastBtnAt = Date.now(); } }, true);
+let busyT;
+function working(on) {
+  S.acting = Math.max(0, (S.acting || 0) + (on ? 1 : -1));
+  document.body.classList.toggle('working', S.acting > 0);
+  clearTimeout(busyT);
+  if (S.acting > 0) busyT = setTimeout(() => { const pl = $('#busyPill'); pl.textContent = '⏳ ' + t('saving'); pl.hidden = false; }, 250);
+  else $('#busyPill').hidden = true;
+}
 function act(action, payload, extra) {
-  S.busy++; setSync('busy');
+  const btn = S.lastBtn && S.lastBtn.isConnected && Date.now() - S.lastBtnAt < 1000 ? S.lastBtn : null;
+  if (btn) { btn.classList.add('loading'); btn.disabled = true; }
+  S.busy++; setSync('busy'); working(true);
   return call(action, payload, extra).then((d) => { if (d && d.view) setView(d.view); else if (d && d.settings) setView(d); setSync('ok'); return d; })
     .catch((e) => { setSync('err', e.message); throw e; })
-    .finally(() => { S.busy--; });
+    .finally(() => { S.busy--; working(false); if (btn && btn.isConnected) { btn.classList.remove('loading'); btn.disabled = false; } });
 }
 function ensureRange() { render(); return inRange() ? Promise.resolve() : refresh(true); }
 
@@ -1755,7 +1778,7 @@ function toast(m) { const x = $('#toast'); x.textContent = m; x.hidden = false; 
 function openSheet(node) { const s = $('#sheet'); s.innerHTML = ''; s.appendChild(node); $('#sheetWrap').hidden = false; }
 function closeSheet() { $('#sheetWrap').hidden = true; $('#sheet').innerHTML = ''; }
 const sheetOpen = () => !$('#sheetWrap').hidden;
-$('#sheetWrap').addEventListener('click', (e) => { if (e.target.id === 'sheetWrap') closeSheet(); });
+$('#sheetWrap').addEventListener('click', (e) => { if (e.target.id === 'sheetWrap' && !S.acting) closeSheet(); });
 $('#syncBtn').addEventListener('click', () => refresh(true));
 $('#devBtn').addEventListener('click', () => deviceSheet());
 $('#bellBtn').addEventListener('click', () => { S.tab = 'plan'; S.sub = 'hist'; render(); window.scrollTo(0, 0); });
@@ -1901,7 +1924,7 @@ function pinSheet(after) {
     el('div', { class: 'sbtns' }, el('button', { class: 'btn', onclick: closeSheet }, t('cancel')), el('button', { class: 'btn pri', style: 'background:#0f766e', onclick: go }, t('unlock')))));
   setTimeout(() => inp.focus(), 60);
 }
-const APP_BUILD = '2026-11-26 17:25';
+const APP_BUILD = '2026-11-27 09:53';
 function deviceSheet() {
   const th = store.get('fp2-theme', 'auto');
   const box = el('div');
@@ -1914,7 +1937,7 @@ function deviceSheet() {
     S.parent ? el('button', { class: 'btn full', style: 'margin-top:14px', onclick: () => { S.parent = null; S.pin = ''; closeSheet(); render(); toast(t('locked')); } }, '🔒 ' + t('lock')) : null,
     MODE !== 'demo' ? el('button', { class: 'btn bad full', style: 'margin-top:8px', onclick: () => twoTap('forget', () => { store.set('fp2-code', ''); S.code = ''; S.v = null; closeSheet(); renderPair(); }) }, t('forget')) : null,
     MODE === 'demo' ? el('button', { class: 'btn bad full', style: 'margin-top:8px', onclick: () => twoTap('reset', () => { call('reset').then((v) => { setView(v); closeSheet(); render(); }); }) }, t('resetDemo')) : null,
-    el('div', { class: 'small muted center', style: 'margin-top:12px', text: t('version') + ' ' + APP_BUILD + (MODE === 'remote' ? ' · GitHub' : MODE === 'gas' ? ' · Apps Script' : '') }),
+    el('div', { class: 'small muted center', style: 'margin-top:12px', text: t('version') + ' ' + APP_BUILD + (MODE === 'remote' ? ' · GitHub' : MODE === 'gas' ? ' · Apps Script' : '') + (S.lastMs ? ' · ' + (S.lastMs / 1000).toFixed(1) + ' s' : '') }),
     el('div', { class: 'sbtns' }, el('button', { class: 'btn', onclick: closeSheet }, t('close')))]);
   openSheet(box);
 }
